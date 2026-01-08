@@ -5,22 +5,48 @@ import (
 	"time"
 )
 
+/*
+|--------------------------------------------------------------------------
+| DATABASE MODEL (INTERNAL)
+|--------------------------------------------------------------------------
+| Dipakai untuk query ke DB
+*/
 type User struct {
-	ID        int64          `json:"id"`
-	Nama      string         `json:"nama"`
-	Email     string         `json:"email"`
-	Password  string         `json:"-"`
-	Role      string         `json:"role"`
-	IsBanned  string         `json:"is_banned"`
-	UnitID    sql.NullInt64  `json:"unit_id"`
-	ServiceID sql.NullInt64  `json:"service_id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	ID        int64
+	Nama      string
+	Email     string
+	Password  string
+	Role      string
+	IsBanned  string
+	UnitID    sql.NullInt64
+	ServiceID sql.NullInt64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
+/*
+|--------------------------------------------------------------------------
+| REQUEST
+|--------------------------------------------------------------------------
+*/
 type LoginRequest struct {
 	Email    string `json:"email" validate:"required"`
 	Password string `json:"password" validate:"required"`
+}
+
+/*
+|--------------------------------------------------------------------------
+| RESPONSE DTO
+|--------------------------------------------------------------------------
+| Dipakai untuk API response
+*/
+type UserResponse struct {
+	ID        int64   `json:"id"`
+	Nama      string  `json:"nama"`
+	Email     string  `json:"email"`
+	Role      string  `json:"role"`
+	UnitID    *int64  `json:"unit_id,omitempty"`
+	ServiceID *int64  `json:"service_id,omitempty"`
 }
 
 type LoginResponse struct {
@@ -28,11 +54,30 @@ type LoginResponse struct {
 	User  UserResponse `json:"user"`
 }
 
-type UserResponse struct {
-	ID        int64         `json:"id"`
-	Nama      string        `json:"nama"`
-	Email     string        `json:"email"`
-	Role      string        `json:"role"`
-	UnitID    sql.NullInt64 `json:"unit_id,omitempty"`
-	ServiceID sql.NullInt64 `json:"service_id,omitempty"`
+/*
+|--------------------------------------------------------------------------
+| MAPPER
+|--------------------------------------------------------------------------
+| Convert User (DB) -> UserResponse (API)
+*/
+func ToUserResponse(u User) UserResponse {
+	var unitID *int64
+	var serviceID *int64
+
+	if u.UnitID.Valid {
+		unitID = &u.UnitID.Int64
+	}
+
+	if u.ServiceID.Valid {
+		serviceID = &u.ServiceID.Int64
+	}
+
+	return UserResponse{
+		ID:        u.ID,
+		Nama:      u.Nama,
+		Email:     u.Email,
+		Role:      u.Role,
+		UnitID:    unitID,
+		ServiceID: serviceID,
+	}
 }

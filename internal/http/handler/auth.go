@@ -82,13 +82,6 @@ func Login(c *fiber.Ctx) error {
 
 	return c.JSON(models.LoginResponse{
 		Token: token,
-		User: models.UserResponse{
-			ID:        user.ID,
-			Nama:      user.Nama,
-			Email:     user.Email,
-			Role:      user.Role,
-			UnitID:    user.UnitID,
-			ServiceID: user.ServiceID,
-		},
+		User:  models.ToUserResponse(user),
 	})
 }
