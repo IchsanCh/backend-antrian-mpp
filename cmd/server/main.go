@@ -1,0 +1,53 @@
+package main
+
+import (
+	"log"
+	"os"
+	"runtime"
+	"backend-antrian/internal/config"
+	"backend-antrian/internal/http/middleware"
+	"backend-antrian/internal/http/handler"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+)
+
+func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	app := fiber.New(fiber.Config{
+		Prefork:       true,
+		CaseSensitive: true,
+		StrictRouting: true,
+	})
+	
+	config.LoadEnv()
+	config.InitRedis()
+	config.InitDB()
+	defer config.CloseDB()
+
+	app.Use(recover.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowMethods: "GET, POST, PUT, DELETE",
+	}))
+
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"message": "Antrian API jalan",
+		})
+	})
+	
+	app.Post("/login", handler.Login)
+
+	api := app.Group("/api", middleware.JWTAuth())
+	
+	api.Post("/queue/take", handler.TakeQueue)
+	api.Get("/queue/unit/:unitId/service/:serviceId", handler.GetServiceQueue)
+	api.Get("/queue/global", handler.GetGlobalQueue)
+
+	addr := os.Getenv("APP_HOST") + ":" + os.Getenv("APP_PORT")
+	log.Println("Server jalan di", addr)
+	log.Fatal(app.Listen(addr))
+}
