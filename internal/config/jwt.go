@@ -13,18 +13,16 @@ type JWTClaims struct {
 	Email     string `json:"email"`
 	Role      string `json:"role"`
 	UnitID    *int64 `json:"unit_id,omitempty"`
-	ServiceID *int64 `json:"service_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(userID int64, nama, email, role string, unitID, serviceID *int64) (string, error) {
+func GenerateToken(userID int64, nama, email, role string, unitID *int64) (string, error) {
 	claims := JWTClaims{
 		UserID:    userID,
 		Nama:      nama,
 		Email:     email,
 		Role:      role,
 		UnitID:    unitID,
-		ServiceID: serviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

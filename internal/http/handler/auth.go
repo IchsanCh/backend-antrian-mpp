@@ -24,7 +24,7 @@ func Login(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	query := `SELECT id, nama, email, password, role, is_banned, unit_id, service_id 
+	query := `SELECT id, nama, email, password, role, is_banned, unit_id
 	          FROM users WHERE email = ?`
 	err := config.DB.QueryRow(query, req.Email).Scan(
 		&user.ID,
@@ -34,7 +34,6 @@ func Login(c *fiber.Ctx) error {
 		&user.Role,
 		&user.IsBanned,
 		&user.UnitID,
-		&user.ServiceID,
 	)
 
 	if err == sql.ErrNoRows {
@@ -63,17 +62,14 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	// Handle nullable unit_id and service_id
-	var unitID, serviceID *int64
+	// Handle nullable unit_id
+	var unitID *int64
 	if user.UnitID.Valid {
 		unitID = &user.UnitID.Int64
 	}
-	if user.ServiceID.Valid {
-		serviceID = &user.ServiceID.Int64
-	}
 
 	// Generate JWT token
-	token, err := config.GenerateToken(user.ID, user.Nama, user.Email, user.Role, unitID, serviceID)
+	token, err := config.GenerateToken(user.ID, user.Nama, user.Email, user.Role, unitID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to generate token",

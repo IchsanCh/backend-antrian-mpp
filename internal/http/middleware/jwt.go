@@ -37,9 +37,6 @@ func JWTAuth() fiber.Handler {
 		if claims.UnitID != nil {
 			c.Locals("unit_id", *claims.UnitID)
 		}
-		if claims.ServiceID != nil {
-			c.Locals("service_id", *claims.ServiceID)
-		}
 
 		return c.Next()
 	}

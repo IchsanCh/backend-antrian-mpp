@@ -19,7 +19,6 @@ type User struct {
 	Role      string
 	IsBanned  string
 	UnitID    sql.NullInt64
-	ServiceID sql.NullInt64
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -46,7 +45,6 @@ type UserResponse struct {
 	Email     string  `json:"email"`
 	Role      string  `json:"role"`
 	UnitID    *int64  `json:"unit_id,omitempty"`
-	ServiceID *int64  `json:"service_id,omitempty"`
 }
 
 type LoginResponse struct {
@@ -62,14 +60,9 @@ type LoginResponse struct {
 */
 func ToUserResponse(u User) UserResponse {
 	var unitID *int64
-	var serviceID *int64
 
 	if u.UnitID.Valid {
 		unitID = &u.UnitID.Int64
-	}
-
-	if u.ServiceID.Valid {
-		serviceID = &u.ServiceID.Int64
 	}
 
 	return UserResponse{
@@ -78,6 +71,5 @@ func ToUserResponse(u User) UserResponse {
 		Email:     u.Email,
 		Role:      u.Role,
 		UnitID:    unitID,
-		ServiceID: serviceID,
 	}
 }
