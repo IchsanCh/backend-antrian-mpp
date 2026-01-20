@@ -1,22 +1,23 @@
 package main
 
 import (
+	"backend-antrian/internal/config"
+	"backend-antrian/internal/http/handler"
+	"backend-antrian/internal/http/middleware"
 	"log"
 	"os"
 	"runtime"
-	"backend-antrian/internal/config"
-	"backend-antrian/internal/http/middleware"
-	"backend-antrian/internal/http/handler"
+
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	app := fiber.New(fiber.Config{
-		Prefork:       true,
+		Prefork:       false,
 		CaseSensitive: true,
 		StrictRouting: true,
 	})
@@ -39,10 +40,20 @@ func main() {
 		})
 	})
 	
-	app.Post("/login", handler.Login)
-
-	api := app.Group("/api", middleware.JWTAuth())
+	app.Post("/san/login", handler.Login)
+	app.Get("/api/units", handler.GetAllUnits)
+	app.Get("/api/units/:id", handler.GetUnitByID)
 	
+	api := app.Group("/api", middleware.JWTAuth())
+	api.Post("/logout", handler.Logout)
+	
+
+	// CRUD yang butuh super_user
+	api.Post("/units", middleware.EmailRoleAuth("super_user"), handler.CreateUnit)
+	api.Put("/units/:id", middleware.EmailRoleAuth("super_user"), handler.UpdateUnit)
+	api.Delete("/units/:id", middleware.EmailRoleAuth("super_user"), handler.DeleteUnit)
+	api.Delete("/units/:id/permanent", middleware.EmailRoleAuth("super_user"), handler.HardDeleteUnit)
+
 	api.Post("/queue/take", handler.TakeQueue)
 	api.Get("/queue/unit/:unitId/service/:serviceId", handler.GetServiceQueue)
 	api.Get("/queue/global", handler.GetGlobalQueue)

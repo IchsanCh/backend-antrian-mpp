@@ -22,11 +22,30 @@ func Login(c *fiber.Ctx) error {
 			"error": "Email dan password harus diisi",
 		})
 	}
+	
+	if req.RecaptchaToken == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "reCAPTCHA token tidak valid",
+		})
+	}
+
+	ok, score, err := config.VerifyRecaptcha(req.RecaptchaToken)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Gagal verifikasi reCAPTCHA",
+		})
+	}
+
+	if !ok || score < 0.5 {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Aktivitas mencurigakan terdeteksi",
+		})
+	}
 
 	var user models.User
 	query := `SELECT id, nama, email, password, role, is_banned, unit_id
 	          FROM users WHERE email = ?`
-	err := config.DB.QueryRow(query, req.Email).Scan(
+	err = config.DB.QueryRow(query, req.Email).Scan(
 		&user.ID,
 		&user.Nama,
 		&user.Email,
@@ -76,8 +95,10 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(models.LoginResponse{
-		Token: token,
-		User:  models.ToUserResponse(user),
+	// Return response dengan pesan welcome
+	return c.JSON(fiber.Map{
+		"token": token,
+		"user":  models.ToUserResponse(user),
+		"message": "Login berhasil! Selamat datang kembali, " + user.Nama,
 	})
 }

@@ -44,8 +44,14 @@ func JWTAuth() fiber.Handler {
 
 func RoleAuth(allowedRoles ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		role := c.Locals("role").(string)
-		
+		roleVal := c.Locals("role")
+		role, ok := roleVal.(string)
+		if !ok {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Role tidak valid",
+			})
+		}
+
 		for _, allowedRole := range allowedRoles {
 			if role == allowedRole {
 				return c.Next()
