@@ -42,8 +42,10 @@ func main() {
 	
 	app.Post("/san/login", handler.Login)
 	app.Get("/api/units", handler.GetAllUnits)
+	app.Get("/api/units/paginate", handler.GetAllUnitsPagination)
 	app.Get("/api/units/:id", handler.GetUnitByID)
-	
+	app.Get("/api/config", handler.GetConfig)
+
 	api := app.Group("/api", middleware.JWTAuth())
 	api.Post("/logout", handler.Logout)
 	
@@ -53,6 +55,9 @@ func main() {
 	api.Put("/units/:id", middleware.EmailRoleAuth("super_user"), handler.UpdateUnit)
 	api.Delete("/units/:id", middleware.EmailRoleAuth("super_user"), handler.DeleteUnit)
 	api.Delete("/units/:id/permanent", middleware.EmailRoleAuth("super_user"), handler.HardDeleteUnit)
+	api.Post("/config", middleware.EmailRoleAuth("super_user"), handler.CreateConfig) 
+	api.Put("/config", middleware.EmailRoleAuth("super_user"), handler.UpdateConfig)    
+
 
 	api.Post("/queue/take", handler.TakeQueue)
 	api.Get("/queue/unit/:unitId/service/:serviceId", handler.GetServiceQueue)
