@@ -48,6 +48,8 @@ func main() {
 
 	api := app.Group("/api", middleware.JWTAuth())
 	api.Post("/logout", handler.Logout)
+	api.Get("users/paginate", handler.GetAllUsersPagination)
+
 	
 
 	// CRUD yang butuh super_user
@@ -57,7 +59,11 @@ func main() {
 	api.Delete("/units/:id/permanent", middleware.EmailRoleAuth("super_user"), handler.HardDeleteUnit)
 	api.Post("/config", middleware.EmailRoleAuth("super_user"), handler.CreateConfig) 
 	api.Put("/config", middleware.EmailRoleAuth("super_user"), handler.UpdateConfig)    
-
+	api.Get("/users", middleware.EmailRoleAuth("super_user"), handler.GetAllUsers)
+	api.Get("/users/:id", middleware.EmailRoleAuth("super_user"), handler.GetUserByID)
+	api.Post("/users", middleware.EmailRoleAuth("super_user"), handler.CreateUser)
+	api.Put("/users/:id", middleware.EmailRoleAuth("super_user"), handler.UpdateUser)
+	api.Delete("/users/:id/permanent", middleware.EmailRoleAuth("super_user"), handler.HardDeleteUser)
 
 	api.Post("/queue/take", handler.TakeQueue)
 	api.Get("/queue/unit/:unitId/service/:serviceId", handler.GetServiceQueue)
