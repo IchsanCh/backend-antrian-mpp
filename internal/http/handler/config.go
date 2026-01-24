@@ -11,12 +11,13 @@ import (
 
 func GetConfig(c *fiber.Ctx) error {
 	var cfg models.Config
-	query := "SELECT id, jam_buka, jam_tutup FROM configs LIMIT 1"
+	query := "SELECT id, jam_buka, jam_tutup, text_marque FROM configs LIMIT 1"
 
 	err := config.DB.QueryRow(query).Scan(
 		&cfg.ID,
 		&cfg.JamBuka,
 		&cfg.JamTutup,
+		&cfg.TextMarque,
 	)
 
 	if err == sql.ErrNoRows {
@@ -44,6 +45,7 @@ func CreateConfig(c *fiber.Ctx) error {
 		Email    string `json:"email"`
 		JamBuka  string `json:"jam_buka"`
 		JamTutup string `json:"jam_tutup"`
+		TextMarque string `json:"text_marque"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -53,9 +55,9 @@ func CreateConfig(c *fiber.Ctx) error {
 	}
 
 	// Validasi input
-	if req.JamBuka == "" || req.JamTutup == "" {
+	if req.JamBuka == "" || req.JamTutup == "" || req.TextMarque == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Jam buka dan jam tutup wajib diisi",
+			"error": "Jam buka, jam tutup dan text marque wajib diisi",
 		})
 	}
 
@@ -83,8 +85,8 @@ func CreateConfig(c *fiber.Ctx) error {
 	}
 
 	// Insert ke database
-	query := "INSERT INTO configs (jam_buka, jam_tutup) VALUES (?, ?)"
-	result, err := config.DB.Exec(query, req.JamBuka, req.JamTutup)
+	query := "INSERT INTO configs (jam_buka, jam_tutup, text_marque) VALUES (?, ?, ?)"
+	result, err := config.DB.Exec(query, req.JamBuka, req.JamTutup, req.TextMarque)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal membuat konfigurasi",
@@ -96,9 +98,9 @@ func CreateConfig(c *fiber.Ctx) error {
 	// Ambil data yang baru dibuat
 	var cfg models.Config
 	config.DB.QueryRow(
-		"SELECT id, jam_buka, jam_tutup FROM configs WHERE id = ?",
+		"SELECT id, jam_buka, jam_tutup, text_marque FROM configs WHERE id = ?",
 		id,
-	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup)
+	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup, &cfg.TextMarque)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"success": true,
@@ -114,6 +116,7 @@ func UpdateConfig(c *fiber.Ctx) error {
 		Email    string `json:"email"`
 		JamBuka  string `json:"jam_buka"`
 		JamTutup string `json:"jam_tutup"`
+		TextMarque string `json:"text_marque"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -123,9 +126,9 @@ func UpdateConfig(c *fiber.Ctx) error {
 	}
 
 	// Validasi input
-	if req.JamBuka == "" || req.JamTutup == "" {
+	if req.JamBuka == "" || req.JamTutup == "" || req.TextMarque == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Jam buka dan jam tutup wajib diisi",
+			"error": "Jam buka, jam tutup dan text marque wajib diisi",
 		})
 	}
 
@@ -152,8 +155,8 @@ func UpdateConfig(c *fiber.Ctx) error {
 	}
 
 	// Update data
-	query := "UPDATE configs SET jam_buka = ?, jam_tutup = ? WHERE id = ?"
-	_, err = config.DB.Exec(query, req.JamBuka, req.JamTutup, configID)
+	query := "UPDATE configs SET jam_buka = ?, jam_tutup = ?, text_marque = ? WHERE id = ?"
+	_, err = config.DB.Exec(query, req.JamBuka, req.JamTutup, req.TextMarque, configID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal mengupdate konfigurasi",
@@ -163,9 +166,9 @@ func UpdateConfig(c *fiber.Ctx) error {
 	// Ambil data yang sudah diupdate
 	var cfg models.Config
 	config.DB.QueryRow(
-		"SELECT id, jam_buka, jam_tutup FROM configs WHERE id = ?",
+		"SELECT id, jam_buka, jam_tutup, text_marque FROM configs WHERE id = ?",
 		configID,
-	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup)
+	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup, &cfg.TextMarque)
 
 	return c.JSON(fiber.Map{
 		"success": true,

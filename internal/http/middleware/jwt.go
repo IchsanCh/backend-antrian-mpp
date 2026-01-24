@@ -30,6 +30,7 @@ func JWTAuth() fiber.Handler {
 			})
 		}
 
+		c.Locals("claims", claims)
 		c.Locals("user_id", claims.UserID)
 		c.Locals("nama", claims.Nama)
 		c.Locals("email", claims.Email)
