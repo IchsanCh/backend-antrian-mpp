@@ -317,10 +317,10 @@ func CreateService(c *fiber.Ctx) error {
 	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 
 	// Validasi: hanya huruf A-Z, panjang 3-10
-	re := regexp.MustCompile(`^[A-Z]{3,10}$`)
+	re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 	if !re.MatchString(req.Code) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Code service harus 3–10 huruf dan tanpa angka atau karakter khusus",
+			"error": "Code service harus 1-2 huruf dan tanpa angka atau karakter khusus",
 		})
 	}
 
@@ -411,10 +411,10 @@ func UpdateService(c *fiber.Ctx) error {
 
 	if req.Code != "" {
 		req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
-		re := regexp.MustCompile(`^[A-Z]{3,10}$`)
+		re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 		if !re.MatchString(req.Code) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Code service harus 3–10 huruf dan tanpa angka atau karakter khusus",
+				"error": "Code service harus 1-2 huruf dan tanpa angka atau karakter khusus",
 			})
 		}
 		var count int

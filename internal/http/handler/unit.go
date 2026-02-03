@@ -3,7 +3,9 @@ package handler
 import (
 	"backend-antrian/internal/config"
 	"backend-antrian/internal/models"
+	"backend-antrian/internal/realtime"
 	"database/sql"
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -217,10 +219,10 @@ func CreateUnit(c *fiber.Ctx) error {
 	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 
 	// Validasi: hanya huruf A-Z, panjang 4–10
-	re := regexp.MustCompile(`^[A-Z]{3,10}$`)
+	re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 	if !re.MatchString(req.Code) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Code unit harus 3–10 huruf dan tanpa angka atau karakter khusus",
+			"error": "Code unit harus 1–10 huruf dan tanpa angka atau karakter khusus",
 		})
 	}
 
@@ -266,6 +268,7 @@ func CreateUnit(c *fiber.Ctx) error {
 		"SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE id = ?",
 		id,
 	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.CreatedAt, &unit.UpdatedAt)
+	broadcastUnitsUpdate()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"success": true,
@@ -309,10 +312,10 @@ func UpdateUnit(c *fiber.Ctx) error {
 
 	if req.Code != "" {
 		req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
-		re := regexp.MustCompile(`^[A-Z]{3,10}$`)
+		re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 		if !re.MatchString(req.Code) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Code unit harus 3–10 huruf dan tanpa angka atau karakter khusus",
+				"error": "Code unit harus 1–10 huruf dan tanpa angka atau karakter khusus",
 			})
 		}
 		var count int
@@ -367,6 +370,7 @@ func UpdateUnit(c *fiber.Ctx) error {
 		"SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE id = ?",
 		id,
 	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.CreatedAt, &unit.UpdatedAt)
+	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -406,6 +410,7 @@ func DeleteUnit(c *fiber.Ctx) error {
 			"error": "Gagal menghapus unit",
 		})
 	}
+	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -441,9 +446,44 @@ func HardDeleteUnit(c *fiber.Ctx) error {
 			"error": "Unit tidak ditemukan",
 		})
 	}
+	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": "Unit berhasil dihapus permanent",
 	})
+}
+func broadcastUnitsUpdate() {
+	rows, err := config.DB.Query(`
+		SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at
+		FROM units
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	units := []models.Unit{}
+	for rows.Next() {
+		var unit models.Unit
+		if err := rows.Scan(
+			&unit.ID,
+			&unit.Code,
+			&unit.NamaUnit,
+			&unit.IsActive,
+			&unit.MainDisplay,
+			&unit.CreatedAt,
+			&unit.UpdatedAt,
+		); err == nil {
+			units = append(units, unit)
+		}
+	}
+
+	payload, _ := json.Marshal(fiber.Map{
+		"type": "units_updated",
+		"data": units,
+	})
+
+	realtime.Units.Broadcast <- payload
 }
