@@ -45,7 +45,7 @@ func main() {
 	config.InitDB()
 	defer config.CloseDB()
 
-	// ✅ Recover middleware (ini yang penting!)
+	// Recover middleware (ini yang penting!)
 	app.Use(fiberRecover.New(fiberRecover.Config{
 		EnableStackTrace: true,
 		StackTraceHandler: func(c *fiber.Ctx, e interface{}) {
@@ -60,7 +60,7 @@ func main() {
 		ExposeHeaders: "Content-Disposition, Content-Type, Content-Length",
 	}))
 
-	// ✅ Rate limiting untuk WebSocket
+	// Rate limiting untuk WebSocket
 	app.Use("/ws/*", limiter.New(limiter.Config{
 		Max:        100,
 		Expiration: 1 * time.Minute,
@@ -147,11 +147,11 @@ func main() {
 	go realtime.RunUnitsBroadcaster()
 
 	addr := os.Getenv("APP_HOST") + ":" + os.Getenv("APP_PORT")
-	log.Printf("🚀 Server starting on %s", addr)
+	log.Printf("Server starting on %s", addr)
 	
-	// ✅ Graceful error handling
+	// Graceful error handling
 	if err := app.Listen(addr); err != nil {
-		log.Printf("❌ Server failed to start: %v", err)
+		log.Printf("Server failed to start: %v", err)
 		os.Exit(1)
 	}
 }
