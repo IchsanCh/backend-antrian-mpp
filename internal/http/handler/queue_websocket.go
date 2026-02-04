@@ -36,7 +36,7 @@ type QueueData struct {
 	AudioPaths      []string `json:"audio_paths"`
 	CreatedAt       string   `json:"created_at"`
 	LastCalledAt    *string  `json:"last_called_at"`
-	TicketNumber    int      `json:"ticket_number"` // untuk sorting
+	TicketNumber    int      `json:"ticket_number"`
 }
 
 type ServiceStats struct {
@@ -50,9 +50,21 @@ type ServiceStats struct {
 |--------------------------------------------------------------------------
 */
 
+type ClientInfo struct {
+	conn         *websocket.Conn
+	writeMux     sync.Mutex
+	closeChan    chan struct{}
+	closed       bool
+	lastPongTime time.Time // ✅ Track last pong
+	id           string    // ✅ Unique ID for logging
+}
+
 var (
-	queueClients = make(map[*websocket.Conn]struct{})
-	queueMutex   sync.RWMutex
+	queueClients   = make(map[*websocket.Conn]*ClientInfo)
+	queueMutex     sync.RWMutex
+	clientCounter  uint64
+	counterMux     sync.Mutex
+	cleanupRunning bool
 )
 
 /*
@@ -61,23 +73,83 @@ var (
 |--------------------------------------------------------------------------
 */
 
-// QueueWebSocket handles realtime queue websocket connection
 func QueueWebSocket(c *websocket.Conn) {
-	registerClient(c)
-	defer unregisterClient(c)
+	// Generate unique client ID
+	counterMux.Lock()
+	clientCounter++
+	clientID := fmt.Sprintf("client-%d", clientCounter)
+	counterMux.Unlock()
 
-	// kirim data awal
-	broadcastQueueData()
+	client := &ClientInfo{
+		conn:         c,
+		closeChan:    make(chan struct{}),
+		closed:       false,
+		lastPongTime: time.Now(),
+		id:           clientID,
+	}
 
-	// keep alive (fiber websocket butuh read loop)
+	log.Printf("[queue] %s connecting from %s", clientID, c.RemoteAddr())
+	registerClient(c, client)
+	defer unregisterClient(c, clientID)
+
+	// ✅ Set ping/pong handlers
+	c.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.SetPongHandler(func(string) error {
+		client.writeMux.Lock()
+		client.lastPongTime = time.Now()
+		client.writeMux.Unlock()
+		c.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	// Kirim data awal
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Delay sedikit untuk stabilitas
+		broadcastQueueData()
+	}()
+
+	// ✅ Ping ticker - kirim ping setiap 20 detik
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	// Goroutine untuk ping
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				client.writeMux.Lock()
+				if client.closed {
+					client.writeMux.Unlock()
+					return
+				}
+
+				c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				err := c.WriteMessage(websocket.PingMessage, nil)
+				client.writeMux.Unlock()
+
+				if err != nil {
+					log.Printf("[queue] %s ping error: %v", clientID, err)
+					return
+				}
+			case <-client.closeChan:
+				return
+			}
+		}
+	}()
+
+	// Read loop
 	for {
 		if _, _, err := c.ReadMessage(); err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+				log.Printf("[queue] %s unexpected close: %v", clientID, err)
+			} else {
+				log.Printf("[queue] %s closed normally", clientID)
+			}
 			return
 		}
 	}
 }
 
-// BroadcastQueueUpdate bisa dipanggil dari handler lain
 func BroadcastQueueUpdate() {
 	broadcastQueueData()
 }
@@ -88,17 +160,94 @@ func BroadcastQueueUpdate() {
 |--------------------------------------------------------------------------
 */
 
-func registerClient(c *websocket.Conn) {
+func registerClient(c *websocket.Conn, client *ClientInfo) {
 	queueMutex.Lock()
-	queueClients[c] = struct{}{}
+	queueClients[c] = client
+	totalClients := len(queueClients)
+	queueMutex.Unlock()
+	
+	log.Printf("[queue] %s registered, total: %d", client.id, totalClients)
+
+	// ✅ Start cleanup goroutine jika belum jalan
+	queueMutex.Lock()
+	if !cleanupRunning {
+		cleanupRunning = true
+		go periodicCleanup()
+	}
 	queueMutex.Unlock()
 }
 
-func unregisterClient(c *websocket.Conn) {
+func unregisterClient(c *websocket.Conn, clientID string) {
 	queueMutex.Lock()
-	delete(queueClients, c)
+	client, exists := queueClients[c]
+	if exists {
+		client.writeMux.Lock()
+		if !client.closed {
+			client.closed = true
+			close(client.closeChan)
+		}
+		client.writeMux.Unlock()
+		delete(queueClients, c)
+	}
+	totalClients := len(queueClients)
 	queueMutex.Unlock()
+
 	_ = c.Close()
+	log.Printf("[queue] %s unregistered, total: %d", clientID, totalClients)
+}
+
+// ✅ TAMBAHAN: Periodic cleanup untuk dead connections
+func periodicCleanup() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		queueMutex.Lock()
+		if len(queueClients) == 0 {
+			cleanupRunning = false
+			queueMutex.Unlock()
+			log.Println("[queue] No clients, stopping cleanup goroutine")
+			return
+		}
+		queueMutex.Unlock()
+
+		now := time.Now()
+		var toRemove []*websocket.Conn
+
+		queueMutex.RLock()
+		for conn, client := range queueClients {
+			client.writeMux.Lock()
+			timeSinceLastPong := now.Sub(client.lastPongTime)
+			client.writeMux.Unlock()
+
+			// ✅ Hapus client yang tidak merespon > 90 detik
+			if timeSinceLastPong > 90*time.Second {
+				log.Printf("[queue] %s dead (no pong for %v), marking for removal", client.id, timeSinceLastPong)
+				toRemove = append(toRemove, conn)
+			}
+		}
+		queueMutex.RUnlock()
+
+		// Remove dead clients
+		if len(toRemove) > 0 {
+			queueMutex.Lock()
+			for _, conn := range toRemove {
+				if client, exists := queueClients[conn]; exists {
+					client.writeMux.Lock()
+					if !client.closed {
+						client.closed = true
+						close(client.closeChan)
+					}
+					client.writeMux.Unlock()
+					delete(queueClients, conn)
+					conn.Close()
+					log.Printf("[queue] %s cleaned up", client.id)
+				}
+			}
+			log.Printf("[queue] Cleaned %d dead clients, remaining: %d", len(toRemove), len(queueClients))
+			queueMutex.Unlock()
+		}
+	}
 }
 
 /*
@@ -114,9 +263,7 @@ func broadcastQueueData() {
 		return
 	}
 
-	// Sort berdasarkan unit name A-Z, kemudian ticket number DESC
 	sortQueueData(queues)
-
 	currentlyPlaying := findCurrentlyPlaying(queues)
 	serviceStats := calculateServiceStats()
 
@@ -134,26 +281,64 @@ func broadcastQueueData() {
 		return
 	}
 
+	// Snapshot clients
 	queueMutex.RLock()
-	defer queueMutex.RUnlock()
-
-	for client := range queueClients {
-		if err := client.WriteMessage(websocket.TextMessage, message); err != nil {
-			log.Printf("[queue] websocket write error: %v", err)
-		}
+	clients := make([]*ClientInfo, 0, len(queueClients))
+	for _, client := range queueClients {
+		clients = append(clients, client)
 	}
+	queueMutex.RUnlock()
+
+	// Broadcast dengan timeout
+	var wg sync.WaitGroup
+	for _, client := range clients {
+		wg.Add(1)
+		go func(c *ClientInfo) {
+			defer wg.Done()
+
+			c.writeMux.Lock()
+			defer c.writeMux.Unlock()
+
+			if c.closed {
+				return
+			}
+
+			// ✅ Set write deadline lebih pendek
+			c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				log.Printf("[queue] %s write error (will be cleaned): %v", c.id, err)
+				c.closed = true
+				if c.closeChan != nil {
+					select {
+					case <-c.closeChan:
+						// Already closed
+					default:
+						close(c.closeChan)
+					}
+				}
+
+				// Schedule removal
+				go func(conn *websocket.Conn, id string) {
+					queueMutex.Lock()
+					delete(queueClients, conn)
+					queueMutex.Unlock()
+					conn.Close()
+					log.Printf("[queue] %s removed after write error", id)
+				}(c.conn, c.id)
+			}
+		}(client)
+	}
+
+	wg.Wait()
 }
 
 func findCurrentlyPlaying(queues []QueueData) *QueueData {
-	// Cari yang status 'called' dan punya last_called_at paling baru
-	// TANPA cek should_play_audio (biar display utama tetap update meski di-mute)
 	var latest *QueueData
 	var latestTime time.Time
 
 	for i := range queues {
-		if queues[i].Status == "called" && 
-		   queues[i].LastCalledAt != nil {  // ✅ Hapus pengecekan ShouldPlayAudio
-			
+		if queues[i].Status == "called" && queues[i].LastCalledAt != nil {
 			t, err := time.Parse("2006-01-02 15:04:05", *queues[i].LastCalledAt)
 			if err != nil {
 				continue
@@ -171,16 +356,13 @@ func findCurrentlyPlaying(queues []QueueData) *QueueData {
 
 func sortQueueData(queues []QueueData) {
 	sort.Slice(queues, func(i, j int) bool {
-		// Primary: Unit name A-Z
 		if queues[i].UnitName != queues[j].UnitName {
 			return queues[i].UnitName < queues[j].UnitName
 		}
-		// Secondary: Ticket number DESC (angka besar di atas)
 		return queues[i].TicketNumber > queues[j].TicketNumber
 	})
 }
 
-// calculateServiceStats menghitung stats per service untuk caller UI
 func calculateServiceStats() map[int64]ServiceStats {
 	query := `
 		SELECT 
@@ -221,13 +403,11 @@ func calculateServiceStats() map[int64]ServiceStats {
 
 /*
 |--------------------------------------------------------------------------
-| Database
+| Database & Audio - TIDAK BERUBAH
 |--------------------------------------------------------------------------
 */
 
 func getQueueData() ([]QueueData, error) {
-	// PERBAIKAN: LEFT JOIN untuk tampilkan semua service yang active
-	// meskipun belum ada antrian hari ini
 	query := `
 		SELECT 
 			s.id as service_id,
@@ -305,7 +485,6 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		return q, err
 	}
 
-	// Extract angka dari ticket code untuk sorting
 	q.TicketNumber = extractNumber(q.TicketCode)
 
 	if createdAt.Valid {
@@ -317,13 +496,9 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		q.LastCalledAt = &t
 	}
 
-	// PERBAIKAN: Should play audio hanya jika:
-	// 1. main_display = active
-	// 2. Status = called (bukan waiting)
-	// 3. Ada last_called_at (artinya baru dipanggil)
-	q.ShouldPlayAudio = mainDisplay == "active" && 
-	                    q.Status == "called" && 
-	                    q.LastCalledAt != nil
+	q.ShouldPlayAudio = mainDisplay == "active" &&
+		q.Status == "called" &&
+		q.LastCalledAt != nil
 
 	q.AudioPaths = generateAudioPaths(q.TicketCode, q.Loket)
 
@@ -337,7 +512,6 @@ func todayRange() (time.Time, time.Time) {
 }
 
 func extractNumber(ticketCode string) int {
-	// Extract angka dari ticket code (misal AK004 -> 4)
 	re := regexp.MustCompile(`\d+`)
 	match := re.FindString(ticketCode)
 	if match == "" {
@@ -346,12 +520,6 @@ func extractNumber(ticketCode string) int {
 	num, _ := strconv.Atoi(match)
 	return num
 }
-
-/*
-|--------------------------------------------------------------------------
-| Audio Logic
-|--------------------------------------------------------------------------
-*/
 
 func generateAudioPaths(ticketCode, loket string) []string {
 	paths := []string{
@@ -399,12 +567,6 @@ func parseLoket(loket string) []string {
 	}
 	return []string{fmt.Sprintf("audio/%s.mp3", loket)}
 }
-
-/*
-|--------------------------------------------------------------------------
-| Number to Audio (Bahasa Indonesia)
-|--------------------------------------------------------------------------
-*/
 
 func parseNumberToAudio(num int) []string {
 	if num == 0 {
