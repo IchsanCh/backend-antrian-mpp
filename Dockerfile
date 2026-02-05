@@ -16,6 +16,11 @@ FROM mysql:8.0-debian
 
 WORKDIR /app
 
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/server /app/server
 COPY --from=builder /app/public /app/public
 COPY .env /app/.env

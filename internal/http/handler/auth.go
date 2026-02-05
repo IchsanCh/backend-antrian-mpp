@@ -31,6 +31,7 @@ func Login(c *fiber.Ctx) error {
 
 	ok, score, err := config.VerifyRecaptcha(req.RecaptchaToken)
 	if err != nil {
+		println("❌ reCAPTCHA error:", err.Error())
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal verifikasi reCAPTCHA",
 		})
