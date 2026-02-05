@@ -55,8 +55,10 @@ func GetUnitVisitorStatistics(c *fiber.Ctx) error {
 	queryTotalVisitors := `
 		SELECT COUNT(qt.id)
 		FROM queue_tickets qt
+		JOIN services s ON s.id = qt.service_id
 		WHERE qt.unit_id = ?
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+			AND s.is_active = 'y'
+			AND DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err := config.DB.QueryRow(queryTotalVisitors, unitID, startDate, endDate).Scan(&totalVisitors)
 	if err != nil {

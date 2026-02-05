@@ -72,6 +72,7 @@ func main() {
 		},
 	}))
 
+	app.Static("/", "./public")
 	app.Static("/audio", "./public/audio")
 
 	app.Get("/", func(c *fiber.Ctx) error {
