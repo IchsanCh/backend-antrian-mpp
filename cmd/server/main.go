@@ -22,6 +22,7 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	app := fiber.New(fiber.Config{
+		BodyLimit:     50 * 1024 * 1024,
 		Prefork:       false,
 		CaseSensitive: true,
 		StrictRouting: true,
@@ -54,10 +55,11 @@ func main() {
 	}))
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:  "*",
+		AllowOrigins:  "https://sandigi.lotusaja.com",
 		AllowHeaders:  "Origin, Content-Type, Accept, Authorization",
-		AllowMethods:  "GET, POST, PUT, DELETE",
+		AllowMethods:  "GET, POST, PUT, DELETE, OPTIONS",
 		ExposeHeaders: "Content-Disposition, Content-Type, Content-Length",
+		AllowCredentials: true,
 	}))
 
 	// Rate limiting untuk WebSocket

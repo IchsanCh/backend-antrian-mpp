@@ -1,0 +1,37 @@
+services:
+  backend-antrian:
+    build: .
+    container_name: backend-antrian
+    env_file:
+      - .env
+    expose:
+      - "8080"
+    environment:
+      - CLIENT_MAX_BODY_SIZE=50M
+    networks:
+      - nginx-proxy
+    restart: unless-stopped
+    mem_limit: 1g
+
+  backend-antrian-nginx:
+    image: nginx:alpine
+    container_name: backend-antrian-nginx
+    depends_on:
+      - backend-antrian
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - VIRTUAL_HOST=backsan.lotusaja.com
+      - LETSENCRYPT_HOST=backsan.lotusaja.com
+      - LETSENCRYPT_EMAIL=info.lotusaja@gmail.com
+      - CLIENT_MAX_BODY_SIZE=50M
+    expose:
+      - "80"
+    networks:
+      - nginx-proxy
+    restart: unless-stopped
+    mem_limit: 512m
+
+networks:
+  nginx-proxy:
+    external: true

@@ -1,0 +1,68 @@
+services:
+  nginx-proxy:
+    image: jwilder/nginx-proxy:latest
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - dhparam:/etc/nginx/dhparam
+    environment:
+      - NGINX_CLIENT_MAX_BODY_SIZE=50M
+    networks:
+      - nginx-proxy
+    restart: always
+    mem_limit: 768m
+
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion
+    container_name: nginx-letsencrypt
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    environment:
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+      - DEFAULT_EMAIL=ichsanmuhammed01@gmail.com
+      - NGINX_CLIENT_MAX_BODY_SIZE=50M
+    depends_on:
+      - nginx-proxy
+    networks:
+      - nginx-proxy
+    restart: always
+    mem_limit: 768m
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: akulahsangprabu
+      MYSQL_DATABASE: project1
+      MYSQL_USER: project1_user
+      MYSQL_PASSWORD: project1_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+    networks:
+      - nginx-proxy
+    restart: always
+    mem_limit: 2000m
+
+volumes:
+  certs:
+  vhost:
+  html:
+  dhparam:
+  mysql-data:
+
+networks:
+  nginx-proxy:
+    name: nginx-proxy
+    driver: bridge
