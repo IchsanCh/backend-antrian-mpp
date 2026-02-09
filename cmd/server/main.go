@@ -55,11 +55,11 @@ func main() {
 	}))
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:  "https://sandigi.lotusaja.com",
+		AllowOrigins:  "*",
 		AllowHeaders:  "Origin, Content-Type, Accept, Authorization",
 		AllowMethods:  "GET, POST, PUT, DELETE, OPTIONS",
 		ExposeHeaders: "Content-Disposition, Content-Type, Content-Length",
-		AllowCredentials: true,
+		AllowCredentials: false,
 	}))
 
 	// Rate limiting untuk WebSocket
@@ -97,6 +97,7 @@ func main() {
 	app.Get("/api/services/unit/status", handler.GetServicesByUnitIDWithStatus)
 	app.Get("/api/audio", handler.GetAllAudios)
 	app.Get("/api/queue/display", handler.GetQueueDisplay)
+	app.Get("/api/faqs", handler.GetAllFAQs)
 
 	// WebSocket endpoints (public)
 	app.Get("/ws/units", websocket.New(handler.UnitsWS))
@@ -128,6 +129,12 @@ func main() {
 	api.Get("/backup/database", middleware.RoleAuth("super_user"), handler.ExportDatabase)
 	api.Get("/reports/visitors/export", middleware.RoleAuth("super_user"), handler.ExportVisitorReport)
 	api.Get("/reports/visitors/statistics", middleware.RoleAuth("super_user"), handler.GetVisitorStatistics)
+
+	api.Get("/faqs/paginate", middleware.RoleAuth("super_user"), handler.GetAllFAQsPagination)
+	api.Get("/faqs/:id", middleware.RoleAuth("super_user"), handler.GetFAQByID)
+	api.Post("/faqs", middleware.RoleAuth("super_user"), handler.CreateFAQ)
+	api.Put("/faqs/:id", middleware.RoleAuth("super_user"), handler.UpdateFAQ)
+	api.Delete("/faqs/:id", middleware.RoleAuth("super_user"), handler.HardDeleteFAQ)
 
 	// UNIT ROLE ROUTES
 	api.Get("/services", middleware.RoleAuth("unit"), handler.GetAllServices)
