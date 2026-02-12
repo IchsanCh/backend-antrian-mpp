@@ -6,6 +6,8 @@ services:
       - .env
     expose:
       - "8080"
+    volumes:
+      - ./public:/app/public
     environment:
       - CLIENT_MAX_BODY_SIZE=50M
     networks:

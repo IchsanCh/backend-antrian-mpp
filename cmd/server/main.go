@@ -64,7 +64,7 @@ func main() {
 
 	// Rate limiting untuk WebSocket
 	app.Use("/ws/*", limiter.New(limiter.Config{
-		Max:        100,
+		Max:        500,
 		Expiration: 1 * time.Minute,
 		LimitReached: func(c *fiber.Ctx) error {
 			log.Printf("[RATE_LIMIT] IP: %s", c.IP())
