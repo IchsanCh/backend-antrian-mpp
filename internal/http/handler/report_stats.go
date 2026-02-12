@@ -49,8 +49,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 		SELECT COUNT(qt.id)
 		FROM queue_tickets qt
 		INNER JOIN units u ON qt.unit_id = u.id
-		WHERE u.is_active = 'y'
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+		WHERE DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err := config.DB.QueryRow(queryTotalVisitors, startDate, endDate).Scan(&totalVisitors)
 	if err != nil {
@@ -65,8 +64,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 		SELECT COUNT(DISTINCT qt.unit_id)
 		FROM queue_tickets qt
 		INNER JOIN units u ON qt.unit_id = u.id
-		WHERE u.is_active = 'y'
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+		WHERE DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err = config.DB.QueryRow(queryTotalInstansi, startDate, endDate).Scan(&totalInstansi)
 	if err != nil {
@@ -81,8 +79,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 		SELECT COUNT(DISTINCT qt.service_id)
 		FROM queue_tickets qt
 		INNER JOIN units u ON qt.unit_id = u.id
-		WHERE u.is_active = 'y'
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+		WHERE DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err = config.DB.QueryRow(queryTotalLayanan, startDate, endDate).Scan(&totalLayanan)
 	if err != nil {
@@ -113,8 +110,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 			SELECT DATE(qt.created_at) AS date
 			FROM queue_tickets qt
 			JOIN units u ON qt.unit_id = u.id
-			WHERE u.is_active = 'y'
-			AND DATE(qt.created_at) BETWEEN ? AND ?
+			WHERE DATE(qt.created_at) BETWEEN ? AND ?
 		) t
 		GROUP BY t.date
 		ORDER BY t.date ASC;
@@ -151,8 +147,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 			COUNT(qt.id) as total
 		FROM queue_tickets qt
 		INNER JOIN units u ON qt.unit_id = u.id
-		WHERE u.is_active = 'y'
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+		WHERE DATE(qt.created_at) BETWEEN ? AND ?
 		GROUP BY qt.unit_id, u.nama_unit
 		HAVING total > 0
 		ORDER BY total DESC
@@ -190,8 +185,7 @@ func GetVisitorStatistics(c *fiber.Ctx) error {
 		FROM queue_tickets qt
 		INNER JOIN units u ON qt.unit_id = u.id
 		INNER JOIN services s ON qt.service_id = s.id
-		WHERE u.is_active = 'y'
-		AND DATE(qt.created_at) BETWEEN ? AND ?
+		WHERE DATE(qt.created_at) BETWEEN ? AND ?
 		GROUP BY qt.service_id, s.nama_service
 		HAVING total > 0
 		ORDER BY total DESC

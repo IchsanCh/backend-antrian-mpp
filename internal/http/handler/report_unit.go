@@ -65,7 +65,7 @@ func ExportUnitVisitorReport(c *fiber.Ctx) error {
 	// Get unit name
 	db := config.DB
 	var unitName string
-	err = db.QueryRow("SELECT nama_unit FROM units WHERE id = ? AND is_active = 'y'", unitID).Scan(&unitName)
+	err = db.QueryRow("SELECT nama_unit FROM units WHERE id = ?", unitID).Scan(&unitName)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get unit information: " + err.Error(),
@@ -130,111 +130,6 @@ func ExportUnitVisitorReport(c *fiber.Ctx) error {
 	return err
 }
 
-// ExportVisitorReport generates and downloads visitor report in Excel format
-func ExportVisitorReportForUnit(c *fiber.Ctx) error {
-	// Parse query parameters
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-	includeServices := c.Query("include_services", "false") == "true"
-
-	// Validate required parameters
-	if startDateStr == "" || endDateStr == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "start_date and end_date are required",
-		})
-	}
-
-	// Parse dates
-	startDate, err := time.Parse("2006-01-02", startDateStr)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid start_date format. Use YYYY-MM-DD",
-		})
-	}
-
-	endDate, err := time.Parse("2006-01-02", endDateStr)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid end_date format. Use YYYY-MM-DD",
-		})
-	}
-
-	// Set time to cover full day range
-	startDate = time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 1, 0, startDate.Location())
-	endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 0, endDate.Location())
-
-	// Generate date columns
-	dateColumns := generateDateColumnsUnit(startDate, endDate)
-
-	// Get unit report data
-	unitReportData, err := getUnitReportDatas(startDate, endDate, dateColumns)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to generate unit report: " + err.Error(),
-		})
-	}
-
-	// Get service report data if requested
-	var serviceReportData []VisitorReportData
-	if includeServices {
-		serviceReportData, err = getServiceUnitReportData(startDate, endDate, dateColumns)
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to generate service report: " + err.Error(),
-			})
-		}
-	}
-
-	// Generate HTML table
-	htmlContent := generateHTMLReportUnit(unitReportData, serviceReportData, dateColumns, includeServices)
-
-	// Create temporary file
-	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("laporan_kunjungan_%s.xls", timestamp)
-	tempDir := "./temp"
-	
-	// Create temp directory if not exists
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to create temp directory",
-		})
-	}
-
-	filePath := filepath.Join(tempDir, filename)
-
-	// Write HTML content to file
-	if err := os.WriteFile(filePath, []byte(htmlContent), 0644); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to create file",
-		})
-	}
-
-	// Set headers for download
-	c.Set("Content-Type", "application/vnd.ms-excel")
-	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-
-	// Send file
-	err = c.SendFile(filePath)
-
-	// Schedule cleanup with retry
-	go func(path string) {
-		// Try to delete with retries
-		maxRetries := 5
-		for i := 0; i < maxRetries; i++ {
-			time.Sleep(10 * time.Second) 
-			
-			if err := os.Remove(path); err == nil {
-				fmt.Printf("Successfully deleted temp file: %s\n", path)
-				return
-			} else if i == maxRetries-1 {
-				fmt.Printf("Failed to delete after %d retries: %s - %v\n", maxRetries, path, err)
-			}
-		}
-	}(filePath)
-
-	return err
-}
-
 // generateDateColumns creates a slice of dates between start and end
 func generateDateColumnsUnit(start, end time.Time) []string {
 	var dates []string
@@ -247,144 +142,6 @@ func generateDateColumnsUnit(start, end time.Time) []string {
 	}
 
 	return dates
-}
-
-// getUnitReportData retrieves visitor count data grouped by unit
-func getUnitReportDatas(startDate, endDate time.Time, dateColumns []string) ([]VisitorReportData, error) {
-	db := config.DB
-
-	// Query to get active units
-	type Unit struct {
-		ID       int64
-		NamaUnit string
-	}
-
-	var units []Unit
-	query := `SELECT id, nama_unit FROM units WHERE is_active = 'y' ORDER BY nama_unit`
-	
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var unit Unit
-		if err := rows.Scan(&unit.ID, &unit.NamaUnit); err != nil {
-			continue
-		}
-		units = append(units, unit)
-	}
-
-	var reportData []VisitorReportData
-
-	for idx, unit := range units {
-		data := VisitorReportData{
-			No:         idx + 1,
-			Name:       unit.NamaUnit,
-			DateCounts: make(map[string]int),
-			Total:      0,
-		}
-
-		// Get visitor counts per date for this unit
-		for _, dateStr := range dateColumns {
-			// Parse date string back to time.Time for querying
-			date, _ := time.Parse("02/01/06", dateStr)
-			dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-			dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 0, date.Location())
-
-			var count int
-			countQuery := `
-				SELECT COUNT(*) 
-				FROM queue_tickets 
-				WHERE unit_id = ? 
-				AND created_at >= ? 
-				AND created_at <= ?
-			`
-			if err := db.QueryRow(countQuery, unit.ID, dayStart, dayEnd).Scan(&count); err != nil {
-				return nil, err
-			}
-
-			data.DateCounts[dateStr] = count
-			data.Total += count
-		}
-
-		reportData = append(reportData, data)
-	}
-
-	return reportData, nil
-}
-
-// getServiceReportData retrieves visitor count data grouped by service
-func getServiceUnitReportData(startDate, endDate time.Time, dateColumns []string) ([]VisitorReportData, error) {
-	db := config.DB
-
-	// Query to get all services from active units only
-	type Service struct {
-		ID          int64
-		NamaService string
-	}
-
-	var services []Service
-	query := `
-		SELECT s.id, s.nama_service 
-		FROM services s
-		INNER JOIN units u ON s.unit_id = u.id
-		WHERE u.is_active = 'y'
-		ORDER BY s.nama_service
-	`
-	
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var service Service
-		if err := rows.Scan(&service.ID, &service.NamaService); err != nil {
-			continue
-		}
-		services = append(services, service)
-	}
-
-	var reportData []VisitorReportData
-
-	for idx, service := range services {
-		data := VisitorReportData{
-			No:         idx + 1,
-			Name:       service.NamaService,
-			DateCounts: make(map[string]int),
-			Total:      0,
-		}
-
-		// Get visitor counts per date for this service
-		for _, dateStr := range dateColumns {
-			// Parse date string back to time.Time for querying
-			date, _ := time.Parse("02/01/06", dateStr)
-			dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-			dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 0, date.Location())
-
-			var count int
-			countQuery := `
-				SELECT COUNT(*) 
-				FROM queue_tickets 
-				WHERE service_id = ? 
-				AND created_at >= ? 
-				AND created_at <= ?
-			`
-			if err := db.QueryRow(countQuery, service.ID, dayStart, dayEnd).Scan(&count); err != nil {
-				return nil, err
-			}
-
-			data.DateCounts[dateStr] = count
-			data.Total += count
-		}
-
-		reportData = append(reportData, data)
-	}
-
-	return reportData, nil
 }
 
 // getUnitServiceReportData retrieves visitor count data for services of a specific unit
@@ -402,7 +159,6 @@ func getUnitServiceReportData(unitID int64, startDate, endDate time.Time, dateCo
 		SELECT s.id, s.nama_service 
 		FROM services s
 		WHERE s.unit_id = ? 
-		AND s.is_active = 'y'
 		ORDER BY s.nama_service
 	`
 	
@@ -464,12 +220,12 @@ func generateHTMLReportUnit(unitData, serviceData []VisitorReportData, dateColum
 	html := "<table border='1'>"
 
 	// Unit Report Section
-	html += generateReportSection("Laporan Kunjungan MPP Kabupaten Pekalongan", "Nama Instansi", unitData, dateColumns)
+	html += generateReportSectionUnit("Laporan Kunjungan MPP Kabupaten Pekalongan", "Nama Instansi", unitData, dateColumns)
 
 	// Service Report Section (if requested)
 	if includeServices && len(serviceData) > 0 {
 		html += "<tr><td colspan='" + fmt.Sprintf("%d", len(dateColumns)+3) + "'>&nbsp;</td></tr>"
-		html += generateReportSection("Laporan Kunjungan Per Layanan", "Nama Layanan", serviceData, dateColumns)
+		html += generateReportSectionUnit("Laporan Kunjungan Per Layanan", "Nama Layanan", serviceData, dateColumns)
 	}
 
 	html += "</table>"
@@ -482,7 +238,7 @@ func generateUnitHTMLReport(unitName string, serviceData []VisitorReportData, da
 
 	// Service Report Section
 	title := fmt.Sprintf("Laporan Kunjungan %s", unitName)
-	html += generateReportSection(title, "Nama Layanan", serviceData, dateColumns)
+	html += generateReportSectionUnit(title, "Nama Layanan", serviceData, dateColumns)
 
 	html += "</table>"
 	return html

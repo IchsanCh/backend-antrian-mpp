@@ -18,6 +18,13 @@ type VisitorReportData struct {
 	Total      int
 }
 
+// ServiceByUnit represents services grouped by unit
+type ServiceByUnit struct {
+	UnitID      int64
+	UnitName    string
+	Services    []VisitorReportData
+}
+
 // ExportVisitorReport generates and downloads visitor report in Excel format
 func ExportVisitorReport(c *fiber.Ctx) error {
 	// Parse query parameters
@@ -62,10 +69,10 @@ func ExportVisitorReport(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get service report data if requested
-	var serviceReportData []VisitorReportData
+	// Get service report data if requested (grouped by unit)
+	var servicesByUnit []ServiceByUnit
 	if includeServices {
-		serviceReportData, err = getServiceReportData(startDate, endDate, dateColumns)
+		servicesByUnit, err = getServiceReportDataGroupedByUnit(startDate, endDate, dateColumns)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "Failed to generate service report: " + err.Error(),
@@ -74,7 +81,7 @@ func ExportVisitorReport(c *fiber.Ctx) error {
 	}
 
 	// Generate HTML table
-	htmlContent := generateHTMLReport(unitReportData, serviceReportData, dateColumns, includeServices)
+	htmlContent := generateHTMLReport(unitReportData, servicesByUnit, dateColumns, includeServices)
 
 	// Create temporary file
 	timestamp := time.Now().Format("20060102_150405")
@@ -141,14 +148,14 @@ func generateDateColumns(start, end time.Time) []string {
 func getUnitReportData(startDate, endDate time.Time, dateColumns []string) ([]VisitorReportData, error) {
 	db := config.DB
 
-	// Query to get active units
+	// Query to get all units (tanpa filter is_active)
 	type Unit struct {
 		ID       int64
 		NamaUnit string
 	}
 
 	var units []Unit
-	query := `SELECT id, nama_unit FROM units WHERE is_active = 'y' ORDER BY nama_unit`
+	query := `SELECT id, nama_unit FROM units ORDER BY nama_unit`
 	
 	rows, err := db.Query(query)
 	if err != nil {
@@ -203,105 +210,141 @@ func getUnitReportData(startDate, endDate time.Time, dateColumns []string) ([]Vi
 	return reportData, nil
 }
 
-// getServiceReportData retrieves visitor count data grouped by service
-func getServiceReportData(startDate, endDate time.Time, dateColumns []string) ([]VisitorReportData, error) {
+// getServiceReportDataGroupedByUnit retrieves visitor count data grouped by unit and their services
+func getServiceReportDataGroupedByUnit(startDate, endDate time.Time, dateColumns []string) ([]ServiceByUnit, error) {
 	db := config.DB
 
-	// Query to get all services from active units only
-	type Service struct {
-		ID          int64
-		NamaService string
+	// Query to get all units (tanpa filter is_active)
+	type Unit struct {
+		ID       int64
+		NamaUnit string
 	}
 
-	var services []Service
-	query := `
-		SELECT s.id, s.nama_service 
-		FROM services s
-		INNER JOIN units u ON s.unit_id = u.id
-		WHERE u.is_active = 'y'
-		ORDER BY s.nama_service
-	`
+	var units []Unit
+	unitQuery := `SELECT id, nama_unit FROM units ORDER BY nama_unit`
 	
-	rows, err := db.Query(query)
+	rows, err := db.Query(unitQuery)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var service Service
-		if err := rows.Scan(&service.ID, &service.NamaService); err != nil {
+		var unit Unit
+		if err := rows.Scan(&unit.ID, &unit.NamaUnit); err != nil {
 			continue
 		}
-		services = append(services, service)
+		units = append(units, unit)
 	}
 
-	var reportData []VisitorReportData
+	var servicesByUnit []ServiceByUnit
 
-	for idx, service := range services {
-		data := VisitorReportData{
-			No:         idx + 1,
-			Name:       service.NamaService,
-			DateCounts: make(map[string]int),
-			Total:      0,
+	// For each unit, get its services
+	for _, unit := range units {
+		serviceByUnit := ServiceByUnit{
+			UnitID:   unit.ID,
+			UnitName: unit.NamaUnit,
+			Services: []VisitorReportData{},
 		}
 
-		// Get visitor counts per date for this service
-		for _, dateStr := range dateColumns {
-			// Parse date string back to time.Time for querying
-			date, _ := time.Parse("02/01/06", dateStr)
-			dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-			dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 0, date.Location())
+		// Query to get services for this unit (tanpa filter is_active)
+		type Service struct {
+			ID          int64
+			NamaService string
+		}
 
-			var count int
-			countQuery := `
-				SELECT COUNT(*) 
-				FROM queue_tickets 
-				WHERE service_id = ? 
-				AND created_at >= ? 
-				AND created_at <= ?
-			`
-			if err := db.QueryRow(countQuery, service.ID, dayStart, dayEnd).Scan(&count); err != nil {
-				return nil, err
+		var services []Service
+		serviceQuery := `
+			SELECT id, nama_service 
+			FROM services 
+			WHERE unit_id = ?
+			ORDER BY nama_service
+		`
+		
+		serviceRows, err := db.Query(serviceQuery, unit.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		for serviceRows.Next() {
+			var service Service
+			if err := serviceRows.Scan(&service.ID, &service.NamaService); err != nil {
+				continue
+			}
+			services = append(services, service)
+		}
+		serviceRows.Close()
+
+		// Get visitor counts for each service
+		for _, service := range services {
+			data := VisitorReportData{
+				Name:       service.NamaService,
+				DateCounts: make(map[string]int),
+				Total:      0,
 			}
 
-			data.DateCounts[dateStr] = count
-			data.Total += count
+			// Get visitor counts per date for this service
+			for _, dateStr := range dateColumns {
+				// Parse date string back to time.Time for querying
+				date, _ := time.Parse("02/01/06", dateStr)
+				dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+				dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 0, date.Location())
+
+				var count int
+				countQuery := `
+					SELECT COUNT(*) 
+					FROM queue_tickets 
+					WHERE service_id = ? 
+					AND created_at >= ? 
+					AND created_at <= ?
+				`
+				if err := db.QueryRow(countQuery, service.ID, dayStart, dayEnd).Scan(&count); err != nil {
+					return nil, err
+				}
+
+				data.DateCounts[dateStr] = count
+				data.Total += count
+			}
+
+			serviceByUnit.Services = append(serviceByUnit.Services, data)
 		}
 
-		reportData = append(reportData, data)
+		// Only add unit if it has services
+		if len(serviceByUnit.Services) > 0 {
+			servicesByUnit = append(servicesByUnit, serviceByUnit)
+		}
 	}
 
-	return reportData, nil
+	return servicesByUnit, nil
 }
 
 // generateHTMLReport creates HTML table for Excel export
-func generateHTMLReport(unitData, serviceData []VisitorReportData, dateColumns []string, includeServices bool) string {
+func generateHTMLReport(unitData []VisitorReportData, servicesByUnit []ServiceByUnit, dateColumns []string, includeServices bool) string {
 	html := "<table border='1'>"
 
 	// Unit Report Section
-	html += generateReportSection("Laporan Kunjungan MPP Kabupaten Pekalongan", "Nama Instansi", unitData, dateColumns)
+	html += generateUnitReportSection(unitData, dateColumns)
 
 	// Service Report Section (if requested)
-	if includeServices && len(serviceData) > 0 {
+	if includeServices && len(servicesByUnit) > 0 {
 		html += "<tr><td colspan='" + fmt.Sprintf("%d", len(dateColumns)+3) + "'>&nbsp;</td></tr>"
-		html += generateReportSection("Laporan Kunjungan Per Layanan", "Nama Layanan", serviceData, dateColumns)
+		html += generateServiceReportSection(servicesByUnit, dateColumns)
 	}
 
 	html += "</table>"
 	return html
 }
 
-// generateReportSection creates a report section with header and data
-func generateReportSection(title, nameColumn string, data []VisitorReportData, dateColumns []string) string {
+// generateUnitReportSection creates unit report section with header and data
+func generateUnitReportSection(data []VisitorReportData, dateColumns []string) string {
 	html := ""
 
 	// Title row
 	colSpan := len(dateColumns) + 3 // No + Name + Dates + Total
-	html += fmt.Sprintf("<tr><th colspan='%d'><h3>%s</h3></th></tr>", colSpan, title)
+	html += fmt.Sprintf("<tr><th colspan='%d'><h3>Laporan Kunjungan MPP Kabupaten Pekalongan</h3></th></tr>", colSpan)
 
 	// Header row
-	html += "<tr><th>No</th><th>" + nameColumn + "</th>"
+	html += "<tr><th>No</th><th>Nama Instansi</th>"
 	for _, date := range dateColumns {
 		html += "<th>" + date + "</th>"
 	}
@@ -326,6 +369,55 @@ func generateReportSection(title, nameColumn string, data []VisitorReportData, d
 
 	// Grand Total row
 	html += "<tr><th colspan='2'>Grand Total</th>"
+	for _, date := range dateColumns {
+		html += fmt.Sprintf("<th>%d</th>", grandTotalByDate[date])
+	}
+	html += fmt.Sprintf("<th>%d</th></tr>", grandTotal)
+
+	return html
+}
+
+// generateServiceReportSection creates service report section grouped by unit
+func generateServiceReportSection(servicesByUnit []ServiceByUnit, dateColumns []string) string {
+	html := ""
+
+	// Title row
+	colSpan := len(dateColumns) + 2 // Name + Dates + Total (tanpa kolom No)
+	html += fmt.Sprintf("<tr><th colspan='%d'><h3>Laporan Kunjungan Per Layanan</h3></th></tr>", colSpan)
+
+	// Header row
+	html += "<tr><th>Nama Layanan</th>"
+	for _, date := range dateColumns {
+		html += "<th>" + date + "</th>"
+	}
+	html += "<th>Total</th></tr>"
+
+	// Grand total trackers
+	grandTotalByDate := make(map[string]int)
+	grandTotal := 0
+
+	// Loop through each unit
+	for _, unitGroup := range servicesByUnit {
+		// Unit header row (spanning all columns)
+		html += fmt.Sprintf("<tr><th colspan='%d' style='background-color: #e0e0e0;'>%s</th></tr>", colSpan, unitGroup.UnitName)
+
+		// Services under this unit
+		for _, service := range unitGroup.Services {
+			html += fmt.Sprintf("<tr><td>%s</td>", service.Name)
+
+			for _, date := range dateColumns {
+				count := service.DateCounts[date]
+				html += fmt.Sprintf("<td>%d</td>", count)
+				grandTotalByDate[date] += count
+			}
+
+			html += fmt.Sprintf("<td>%d</td></tr>", service.Total)
+			grandTotal += service.Total
+		}
+	}
+
+	// Grand Total row
+	html += "<tr><th>Grand Total</th>"
 	for _, date := range dateColumns {
 		html += fmt.Sprintf("<th>%d</th>", grandTotalByDate[date])
 	}

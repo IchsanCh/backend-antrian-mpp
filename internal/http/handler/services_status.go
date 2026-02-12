@@ -62,13 +62,16 @@ func GetServicesByUnitIDWithStatus(c *fiber.Ctx) error {
 	}
 
 	// Query semua services dari unit ini (TANPA filter is_active)
+	// JOIN ke units untuk ambil nama_unit sebagai loket
 	query := `
 		SELECT 
-			id, unit_id, nama_service, code, loket, limits_queue,
-			is_active, created_at, updated_at
-		FROM services
-		WHERE unit_id = ?
-		ORDER BY created_at ASC
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue,
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit
+		FROM services s
+		JOIN units u ON s.unit_id = u.id
+		WHERE s.unit_id = ?
+		ORDER BY s.created_at ASC
 	`
 
 	rows, err := config.DB.Query(query, unitID)
@@ -85,20 +88,25 @@ func GetServicesByUnitIDWithStatus(c *fiber.Ctx) error {
 	services := []ServiceWithStatus{}
 	for rows.Next() {
 		var service ServiceWithStatus
+		var namaUnit string
+		
 		err := rows.Scan(
 			&service.ID,
 			&service.UnitID,
 			&service.NamaService,
 			&service.Code,
-			&service.Loket,
 			&service.LimitsQueue,
 			&service.IsActive,
 			&service.CreatedAt,
 			&service.UpdatedAt,
+			&namaUnit,
 		)
 		if err != nil {
 			continue
 		}
+
+		// Field Loket diisi dari nama_unit
+		service.Loket = namaUnit
 
 		// Hitung jumlah antrian hari ini untuk service ini
 		var todayCount int

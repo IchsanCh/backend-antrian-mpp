@@ -36,7 +36,7 @@ func GetQueueDisplay(c *fiber.Ctx) error {
 			s.id as service_id,
 			s.nama_service,
 			s.code as service_code,
-			s.loket,
+			u.nama_unit as loket,
 			(
 				SELECT qt.ticket_code 
 				FROM queue_tickets qt 

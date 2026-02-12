@@ -7,7 +7,7 @@ type Service struct {
 	UnitID      int64     `json:"unit_id"`
 	NamaService string    `json:"nama_service"`
 	Code        string    `json:"code"`
-	Loket       string    `json:"loket"`
+	Loket       string    `json:"loket"`        
 	LimitsQueue int       `json:"limits_queue"`
 	IsActive    string    `json:"is_active"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -17,7 +17,6 @@ type Service struct {
 type CreateServiceRequest struct {
 	NamaService string `json:"nama_service" validate:"required,max=255"`
 	Code        string `json:"code" validate:"required,max=10"`
-	Loket       string `json:"loket" validate:"required,max=255"`
 	LimitsQueue int    `json:"limits_queue" validate:"min=0"`
 	IsActive    string `json:"is_active" validate:"omitempty,oneof=y n"`
 }
@@ -25,7 +24,6 @@ type CreateServiceRequest struct {
 type UpdateServiceRequest struct {
 	NamaService string `json:"nama_service" validate:"omitempty,max=255"`
 	Code        string `json:"code" validate:"omitempty,max=10"`
-	Loket       string `json:"loket" validate:"omitempty,max=255"`
 	LimitsQueue *int   `json:"limits_queue" validate:"omitempty,min=0"`
 	IsActive    string `json:"is_active" validate:"omitempty,oneof=y n"`
 }

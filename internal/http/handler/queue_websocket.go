@@ -34,9 +34,7 @@ type QueueData struct {
 	Status          string   `json:"status"`
 	ShouldPlayAudio bool     `json:"should_play_audio"`
 	AudioPaths      []string `json:"audio_paths"`
-	CreatedAt       string   `json:"created_at"`
 	LastCalledAt    *string  `json:"last_called_at"`
-	TicketNumber    int      `json:"ticket_number"`
 }
 
 type ServiceStats struct {
@@ -55,8 +53,8 @@ type ClientInfo struct {
 	writeMux     sync.Mutex
 	closeChan    chan struct{}
 	closed       bool
-	lastPongTime time.Time // ✅ Track last pong
-	id           string    // ✅ Unique ID for logging
+	lastPongTime time.Time
+	id           string
 }
 
 var (
@@ -92,7 +90,7 @@ func QueueWebSocket(c *websocket.Conn) {
 	registerClient(c, client)
 	defer unregisterClient(c, clientID)
 
-	// ✅ Set ping/pong handlers
+	// Set ping/pong handlers
 	c.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.SetPongHandler(func(string) error {
 		client.writeMux.Lock()
@@ -104,11 +102,11 @@ func QueueWebSocket(c *websocket.Conn) {
 
 	// Kirim data awal
 	go func() {
-		time.Sleep(100 * time.Millisecond) // Delay sedikit untuk stabilitas
+		time.Sleep(100 * time.Millisecond)
 		broadcastQueueData()
 	}()
 
-	// ✅ Ping ticker - kirim ping setiap 20 detik
+	// Ping ticker - kirim ping setiap 20 detik
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
@@ -168,7 +166,7 @@ func registerClient(c *websocket.Conn, client *ClientInfo) {
 	
 	log.Printf("[queue] %s registered, total: %d", client.id, totalClients)
 
-	// ✅ Start cleanup goroutine jika belum jalan
+	// Start cleanup goroutine jika belum jalan
 	queueMutex.Lock()
 	if !cleanupRunning {
 		cleanupRunning = true
@@ -196,7 +194,7 @@ func unregisterClient(c *websocket.Conn, clientID string) {
 	log.Printf("[queue] %s unregistered, total: %d", clientID, totalClients)
 }
 
-// ✅ TAMBAHAN: Periodic cleanup untuk dead connections
+// Periodic cleanup untuk dead connections
 func periodicCleanup() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -220,7 +218,7 @@ func periodicCleanup() {
 			timeSinceLastPong := now.Sub(client.lastPongTime)
 			client.writeMux.Unlock()
 
-			// ✅ Hapus client yang tidak merespon > 90 detik
+			// Hapus client yang tidak merespon > 90 detik
 			if timeSinceLastPong > 90*time.Second {
 				log.Printf("[queue] %s dead (no pong for %v), marking for removal", client.id, timeSinceLastPong)
 				toRemove = append(toRemove, conn)
@@ -303,7 +301,7 @@ func broadcastQueueData() {
 				return
 			}
 
-			// ✅ Set write deadline lebih pendek
+			// Set write deadline
 			c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
@@ -359,7 +357,8 @@ func sortQueueData(queues []QueueData) {
 		if queues[i].UnitName != queues[j].UnitName {
 			return queues[i].UnitName < queues[j].UnitName
 		}
-		return queues[i].TicketNumber > queues[j].TicketNumber
+		// Sort by ID descending for tickets with same unit
+		return queues[i].ID > queues[j].ID
 	})
 }
 
@@ -403,7 +402,7 @@ func calculateServiceStats() map[int64]ServiceStats {
 
 /*
 |--------------------------------------------------------------------------
-| Database & Audio - TIDAK BERUBAH
+| Database Query - OPTIMIZED WITH UNION
 |--------------------------------------------------------------------------
 */
 
@@ -413,30 +412,46 @@ func getQueueData() ([]QueueData, error) {
 			s.id as service_id,
 			s.nama_service,
 			s.code as service_code,
-			s.loket,
 			s.unit_id,
 			u.nama_unit,
 			u.main_display,
+			u.audio_file,
 			COALESCE(qt.id, 0) as ticket_id,
-			COALESCE(qt.ticket_code, CONCAT(s.code, '000')) as ticket_code,
+			COALESCE(qt.ticket_code, '-') as ticket_code,
 			COALESCE(qt.status, 'waiting') as status,
-			qt.created_at,
 			qt.last_called_at
 		FROM services s
 		JOIN units u ON s.unit_id = u.id
 		LEFT JOIN (
-			SELECT 
-				qt1.*,
-				ROW_NUMBER() OVER (
-					PARTITION BY qt1.service_id 
-					ORDER BY qt1.last_called_at DESC, qt1.created_at DESC
-				) as rn
+			-- Get ticket with latest last_called_at per service (regardless of current status)
+			SELECT qt1.* 
 			FROM queue_tickets qt1
-			WHERE qt1.status IN ('waiting', 'called')
-			  AND DATE(qt1.created_at) = CURDATE()
-		) qt ON s.id = qt.service_id AND qt.rn = 1
+			INNER JOIN (
+				SELECT service_id, MAX(last_called_at) as max_called
+				FROM queue_tickets
+				WHERE last_called_at IS NOT NULL
+				  AND DATE(created_at) = CURDATE()
+				GROUP BY service_id
+			) qt2 ON qt1.service_id = qt2.service_id 
+				 AND qt1.last_called_at = qt2.max_called
+			
+			UNION ALL
+			
+			-- Get next WAITING ticket per service
+			SELECT qt3.* 
+			FROM queue_tickets qt3
+			INNER JOIN (
+				SELECT service_id, MIN(created_at) as min_created
+				FROM queue_tickets
+				WHERE status = 'waiting' 
+				  AND DATE(created_at) = CURDATE()
+				GROUP BY service_id
+			) qt4 ON qt3.service_id = qt4.service_id 
+				 AND qt3.created_at = qt4.min_created
+			WHERE qt3.status = 'waiting'
+		) qt ON s.id = qt.service_id
 		WHERE s.is_active = 'y'
-		ORDER BY u.nama_unit ASC, qt.created_at DESC
+		ORDER BY u.nama_unit ASC, qt.id DESC
 	`
 
 	rows, err := config.DB.Query(query)
@@ -463,7 +478,7 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 	var (
 		q           QueueData
 		mainDisplay string
-		createdAt   sql.NullTime
+		audioFile   sql.NullString
 		lastCalled  sql.NullTime
 	)
 
@@ -471,25 +486,21 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		&q.ServiceID,
 		&q.ServiceName,
 		&q.ServiceCode,
-		&q.Loket,
 		&q.UnitID,
 		&q.UnitName,
 		&mainDisplay,
+		&audioFile,
 		&q.ID,
 		&q.TicketCode,
 		&q.Status,
-		&createdAt,
 		&lastCalled,
 	)
 	if err != nil {
 		return q, err
 	}
 
-	q.TicketNumber = extractNumber(q.TicketCode)
-
-	if createdAt.Valid {
-		q.CreatedAt = createdAt.Time.Format("2006-01-02 15:04:05")
-	}
+	// Field Loket diisi dari nama_unit untuk response API
+	q.Loket = q.UnitName
 
 	if lastCalled.Valid {
 		t := lastCalled.Time.Format("2006-01-02 15:04:05")
@@ -500,15 +511,14 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		q.Status == "called" &&
 		q.LastCalledAt != nil
 
-	q.AudioPaths = generateAudioPaths(q.TicketCode, q.Loket)
+	// Generate audio paths menggunakan audio_file dari unit
+	audioFileName := ""
+	if audioFile.Valid {
+		audioFileName = audioFile.String
+	}
+	q.AudioPaths = generateAudioPaths(q.TicketCode, audioFileName)
 
 	return q, nil
-}
-
-func todayRange() (time.Time, time.Time) {
-	now := time.Now()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	return start, start.Add(24 * time.Hour)
 }
 
 func extractNumber(ticketCode string) int {
@@ -521,15 +531,25 @@ func extractNumber(ticketCode string) int {
 	return num
 }
 
-func generateAudioPaths(ticketCode, loket string) []string {
+/*
+|--------------------------------------------------------------------------
+| Audio Path Generation
+|--------------------------------------------------------------------------
+*/
+
+func generateAudioPaths(ticketCode, audioFile string) []string {
 	paths := []string{
 		"audio/ting.mp3",
 		"audio/nomor_antrian.mp3",
 	}
 
 	paths = append(paths, parseTicketCode(ticketCode)...)
-	paths = append(paths, "audio/silahkan_menuju_loket.mp3")
-	paths = append(paths, parseLoket(loket)...)
+	paths = append(paths, "audio/ke_loket.mp3")
+
+	// Gunakan audio_file langsung dari database unit
+	if audioFile != "" {
+		paths = append(paths, fmt.Sprintf("audio/%s", audioFile))
+	}
 
 	return paths
 }
@@ -559,13 +579,6 @@ func parseTicketCode(code string) []string {
 	}
 
 	return paths
-}
-
-func parseLoket(loket string) []string {
-	if n, err := strconv.Atoi(loket); err == nil {
-		return parseNumberToAudio(n)
-	}
-	return []string{fmt.Sprintf("audio/%s.mp3", loket)}
 }
 
 func parseNumberToAudio(num int) []string {

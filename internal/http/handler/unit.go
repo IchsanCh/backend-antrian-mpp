@@ -17,7 +17,7 @@ import (
 func GetAllUnits(c *fiber.Ctx) error {
 	isActive := c.Query("is_active")
 
-	query := "SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE 1=1"
+	query := "SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE 1=1"
 	args := []interface{}{}
 
 	if isActive != "" {
@@ -44,6 +44,7 @@ func GetAllUnits(c *fiber.Ctx) error {
 			&unit.NamaUnit,
 			&unit.IsActive,
 			&unit.MainDisplay,
+			&unit.AudioFile,
 			&unit.CreatedAt,
 			&unit.UpdatedAt,
 		)
@@ -59,7 +60,7 @@ func GetAllUnits(c *fiber.Ctx) error {
 	})
 }
 
-// GetAllUnits - Ambil semua unit dengan pagination
+// GetAllUnitsPagination - Ambil semua unit dengan pagination
 func GetAllUnitsPagination(c *fiber.Ctx) error {
 	isActive := c.Query("is_active")
 	search := c.Query("search")
@@ -100,7 +101,7 @@ func GetAllUnitsPagination(c *fiber.Ctx) error {
 	}
 
 	// Query untuk ambil data dengan pagination
-	query := "SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE 1=1"
+	query := "SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE 1=1"
 	args := []interface{}{}
 
 	if isActive != "" {
@@ -133,6 +134,7 @@ func GetAllUnitsPagination(c *fiber.Ctx) error {
 			&unit.NamaUnit,
 			&unit.IsActive,
 			&unit.MainDisplay,
+			&unit.AudioFile,
 			&unit.CreatedAt,
 			&unit.UpdatedAt,
 		)
@@ -162,7 +164,7 @@ func GetUnitByID(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var unit models.Unit
-	query := "SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE id = ?"
+	query := "SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE id = ?"
 
 	err := config.DB.QueryRow(query, id).Scan(
 		&unit.ID,
@@ -170,6 +172,7 @@ func GetUnitByID(c *fiber.Ctx) error {
 		&unit.NamaUnit,
 		&unit.IsActive,
 		&unit.MainDisplay,
+		&unit.AudioFile,
 		&unit.CreatedAt,
 		&unit.UpdatedAt,
 	)
@@ -196,11 +199,12 @@ func GetUnitByID(c *fiber.Ctx) error {
 func CreateUnit(c *fiber.Ctx) error {
 	// Role sudah divalidasi di middleware, langsung parse request
 	var req struct {
-		Email    string `json:"email"`
-		Code     string `json:"code"`
-		NamaUnit string `json:"nama_unit"`
-		IsActive string `json:"is_active"`
-		MainDisplay string `json:"main_display"`
+		Email       string  `json:"email"`
+		Code        string  `json:"code"`
+		NamaUnit    string  `json:"nama_unit"`
+		IsActive    string  `json:"is_active"`
+		MainDisplay string  `json:"main_display"`
+		AudioFile   *string `json:"audio_file"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -218,14 +222,13 @@ func CreateUnit(c *fiber.Ctx) error {
 	// Normalisasi code
 	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 
-	// Validasi: hanya huruf A-Z, panjang 4–10
+	// Validasi: hanya huruf A-Z, panjang 1–10
 	re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 	if !re.MatchString(req.Code) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Code unit harus 1–10 huruf dan tanpa angka atau karakter khusus",
 		})
 	}
-
 
 	// Set default is_active jika kosong
 	if req.IsActive == "" {
@@ -252,8 +255,8 @@ func CreateUnit(c *fiber.Ctx) error {
 	}
 
 	// Insert ke database
-	query := "INSERT INTO units (code, nama_unit, is_active, main_display) VALUES (?, ?, ?, ?)"
-	result, err := config.DB.Exec(query, req.Code, req.NamaUnit, req.IsActive, req.MainDisplay)
+	query := "INSERT INTO units (code, nama_unit, is_active, main_display, audio_file) VALUES (?, ?, ?, ?, ?)"
+	result, err := config.DB.Exec(query, req.Code, req.NamaUnit, req.IsActive, req.MainDisplay, req.AudioFile)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal membuat unit",
@@ -265,9 +268,9 @@ func CreateUnit(c *fiber.Ctx) error {
 	// Ambil data yang baru dibuat
 	var unit models.Unit
 	config.DB.QueryRow(
-		"SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE id = ?",
+		"SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE id = ?",
 		id,
-	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.CreatedAt, &unit.UpdatedAt)
+	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.AudioFile, &unit.CreatedAt, &unit.UpdatedAt)
 	broadcastUnitsUpdate()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -283,11 +286,12 @@ func UpdateUnit(c *fiber.Ctx) error {
 
 	// Role sudah divalidasi di middleware
 	var req struct {
-		Email    string `json:"email"`
-		Code     string `json:"code"`
-		NamaUnit string `json:"nama_unit"`
-		IsActive string `json:"is_active"`
-		MainDisplay string `json:"main_display"`
+		Email       string  `json:"email"`
+		Code        string  `json:"code"`
+		NamaUnit    string  `json:"nama_unit"`
+		IsActive    string  `json:"is_active"`
+		MainDisplay string  `json:"main_display"`
+		AudioFile   *string `json:"audio_file"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -312,7 +316,7 @@ func UpdateUnit(c *fiber.Ctx) error {
 
 	if req.Code != "" {
 		req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
-		re := regexp.MustCompile(`^[A-Z]{1,10}$`)
+		re := regexp.MustCompile(`^[[A-Z]{1,10}$`)
 		if !re.MatchString(req.Code) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Code unit harus 1–10 huruf dan tanpa angka atau karakter khusus",
@@ -343,6 +347,16 @@ func UpdateUnit(c *fiber.Ctx) error {
 		args = append(args, req.MainDisplay)
 	}
 
+	// AudioFile bisa di-set null jika dikirim sebagai empty string
+	if req.AudioFile != nil {
+		updates = append(updates, "audio_file = ?")
+		if *req.AudioFile == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *req.AudioFile)
+		}
+	}
+
 	if len(updates) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Tidak ada data yang diupdate",
@@ -367,9 +381,9 @@ func UpdateUnit(c *fiber.Ctx) error {
 
 	var unit models.Unit
 	config.DB.QueryRow(
-		"SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at FROM units WHERE id = ?",
+		"SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE id = ?",
 		id,
-	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.CreatedAt, &unit.UpdatedAt)
+	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.AudioFile, &unit.CreatedAt, &unit.UpdatedAt)
 	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
@@ -453,9 +467,10 @@ func HardDeleteUnit(c *fiber.Ctx) error {
 		"message": "Unit berhasil dihapus permanent",
 	})
 }
+
 func broadcastUnitsUpdate() {
 	rows, err := config.DB.Query(`
-		SELECT id, code, nama_unit, is_active, main_display, created_at, updated_at
+		SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at
 		FROM units
 		ORDER BY created_at DESC
 	`)
@@ -473,6 +488,7 @@ func broadcastUnitsUpdate() {
 			&unit.NamaUnit,
 			&unit.IsActive,
 			&unit.MainDisplay,
+			&unit.AudioFile,
 			&unit.CreatedAt,
 			&unit.UpdatedAt,
 		); err == nil {

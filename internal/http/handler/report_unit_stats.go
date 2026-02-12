@@ -57,7 +57,6 @@ func GetUnitVisitorStatistics(c *fiber.Ctx) error {
 		FROM queue_tickets qt
 		JOIN services s ON s.id = qt.service_id
 		WHERE qt.unit_id = ?
-			AND s.is_active = 'y'
 			AND DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err := config.DB.QueryRow(queryTotalVisitors, unitID, startDate, endDate).Scan(&totalVisitors)
@@ -74,7 +73,6 @@ func GetUnitVisitorStatistics(c *fiber.Ctx) error {
 		FROM queue_tickets qt
 		INNER JOIN services s ON qt.service_id = s.id
 		WHERE qt.unit_id = ?
-		AND s.is_active = 'y'
 		AND DATE(qt.created_at) BETWEEN ? AND ?
 	`
 	err = config.DB.QueryRow(queryTotalLayanan, unitID, startDate, endDate).Scan(&totalLayanan)
@@ -138,7 +136,6 @@ func GetUnitVisitorStatistics(c *fiber.Ctx) error {
 		FROM queue_tickets qt
 		INNER JOIN services s ON qt.service_id = s.id
 		WHERE qt.unit_id = ?
-		AND s.is_active = 'y'
 		AND DATE(qt.created_at) BETWEEN ? AND ?
 		GROUP BY qt.service_id, s.nama_service
 		HAVING total > 0

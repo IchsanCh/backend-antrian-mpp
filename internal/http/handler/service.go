@@ -17,20 +17,22 @@ func GetAllServices(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			id, unit_id, nama_service, code, loket, limits_queue, 
-			is_active, created_at, updated_at
-		FROM services
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue, 
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
 		WHERE 1=1
 	`
 	args := []interface{}{}
 
 	// Filter aktif / tidak aktif (opsional)
 	if isActive != "" {
-		query += " AND is_active = ?"
+		query += " AND s.is_active = ?"
 		args = append(args, isActive)
 	}
 
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY s.created_at DESC"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
@@ -48,11 +50,11 @@ func GetAllServices(c *fiber.Ctx) error {
 			&service.UnitID,
 			&service.NamaService,
 			&service.Code,
-			&service.Loket,
 			&service.LimitsQueue,
 			&service.IsActive,
 			&service.CreatedAt,
 			&service.UpdatedAt,
+			&service.Loket, // dari units.nama_unit
 		); err != nil {
 			continue
 		}
@@ -78,20 +80,22 @@ func GetServicesByUnitID(c *fiber.Ctx) error {
 
 	query := `
 		SELECT 
-			id, unit_id, nama_service, code, loket, limits_queue,
-			is_active, created_at, updated_at
-		FROM services
-		WHERE unit_id = ?
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue,
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
+		WHERE s.unit_id = ?
 	`
 	args := []interface{}{unitID}
 
 	// filter aktif / nonaktif (opsional)
 	if isActive != "" {
-		query += " AND is_active = ?"
+		query += " AND s.is_active = ?"
 		args = append(args, isActive)
 	}
 
-	query += " ORDER BY created_at ASC"
+	query += " ORDER BY s.created_at ASC"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
@@ -109,11 +113,11 @@ func GetServicesByUnitID(c *fiber.Ctx) error {
 			&service.UnitID,
 			&service.NamaService,
 			&service.Code,
-			&service.Loket,
 			&service.LimitsQueue,
 			&service.IsActive,
 			&service.CreatedAt,
 			&service.UpdatedAt,
+			&service.Loket, // dari units.nama_unit
 		); err != nil {
 			continue
 		}
@@ -125,8 +129,6 @@ func GetServicesByUnitID(c *fiber.Ctx) error {
 		"data":    services,
 	})
 }
-
-
 
 // GetAllServicesPagination - Ambil semua service dengan pagination (filter by user's unit_id)
 func GetAllServicesPagination(c *fiber.Ctx) error {
@@ -164,8 +166,8 @@ func GetAllServicesPagination(c *fiber.Ctx) error {
 
 	if search != "" {
 		search = "%" + strings.TrimSpace(search) + "%"
-		countQuery += " AND (code LIKE ? OR nama_service LIKE ? OR loket LIKE ?)"
-		countArgs = append(countArgs, search, search, search)
+		countQuery += " AND (code LIKE ? OR nama_service LIKE ?)"
+		countArgs = append(countArgs, search, search)
 	}
 
 	var totalData int
@@ -177,20 +179,28 @@ func GetAllServicesPagination(c *fiber.Ctx) error {
 	}
 
 	// Query untuk ambil data dengan pagination - SELALU filter by unit_id user yang login
-	query := "SELECT id, unit_id, nama_service, code, loket, limits_queue, is_active, created_at, updated_at FROM services WHERE unit_id = ?"
+	query := `
+		SELECT 
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue, 
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
+		WHERE s.unit_id = ?
+	`
 	args := []interface{}{*claims.UnitID}
 
 	if isActive != "" {
-		query += " AND is_active = ?"
+		query += " AND s.is_active = ?"
 		args = append(args, isActive)
 	}
 
 	if search != "" {
-		query += " AND (code LIKE ? OR nama_service LIKE ? OR loket LIKE ?)"
-		args = append(args, search, search, search)
+		query += " AND (s.code LIKE ? OR s.nama_service LIKE ?)"
+		args = append(args, search, search)
 	}
 
-	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY s.created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
 	rows, err := config.DB.Query(query, args...)
@@ -209,11 +219,11 @@ func GetAllServicesPagination(c *fiber.Ctx) error {
 			&service.UnitID,
 			&service.NamaService,
 			&service.Code,
-			&service.Loket,
 			&service.LimitsQueue,
 			&service.IsActive,
 			&service.CreatedAt,
 			&service.UpdatedAt,
+			&service.Loket, // dari units.nama_unit
 		)
 		if err != nil {
 			continue
@@ -242,12 +252,20 @@ func GetServiceByID(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var service models.Service
-	query := "SELECT id, unit_id, nama_service, code, loket, limits_queue, is_active, created_at, updated_at FROM services WHERE id = ?"
+	query := `
+		SELECT 
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue, 
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
+		WHERE s.id = ?
+	`
 	args := []interface{}{id}
 
 	// Jika role unit, pastikan service milik unit tersebut
 	if claims.Role == "unit" && claims.UnitID != nil {
-		query += " AND unit_id = ?"
+		query += " AND s.unit_id = ?"
 		args = append(args, *claims.UnitID)
 	}
 
@@ -256,11 +274,11 @@ func GetServiceByID(c *fiber.Ctx) error {
 		&service.UnitID,
 		&service.NamaService,
 		&service.Code,
-		&service.Loket,
 		&service.LimitsQueue,
 		&service.IsActive,
 		&service.CreatedAt,
 		&service.UpdatedAt,
+		&service.Loket, // dari units.nama_unit
 	)
 
 	if err == sql.ErrNoRows {
@@ -295,7 +313,6 @@ func CreateService(c *fiber.Ctx) error {
 	var req struct {
 		NamaService string `json:"nama_service"`
 		Code        string `json:"code"`
-		Loket       string `json:"loket"`
 		LimitsQueue int    `json:"limits_queue"`
 		IsActive    string `json:"is_active"`
 	}
@@ -307,20 +324,20 @@ func CreateService(c *fiber.Ctx) error {
 	}
 
 	// Validasi input service
-	if req.NamaService == "" || req.Code == "" || req.Loket == "" {
+	if req.NamaService == "" || req.Code == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Nama service, code, dan loket wajib diisi",
+			"error": "Nama service dan code wajib diisi",
 		})
 	}
 
 	// Normalisasi code
 	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 
-	// Validasi: hanya huruf A-Z, panjang 3-10
+	// Validasi: hanya huruf A-Z, panjang 1-10
 	re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 	if !re.MatchString(req.Code) {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Code service harus 1-2 huruf dan tanpa angka atau karakter khusus",
+			"error": "Code service harus 1-10 huruf dan tanpa angka atau karakter khusus",
 		})
 	}
 
@@ -344,9 +361,9 @@ func CreateService(c *fiber.Ctx) error {
 		})
 	}
 
-	// Insert ke database (unit_id dari JWT token)
-	query := "INSERT INTO services (unit_id, nama_service, code, loket, limits_queue, is_active) VALUES (?, ?, ?, ?, ?, ?)"
-	result, err := config.DB.Exec(query, *claims.UnitID, req.NamaService, req.Code, req.Loket, req.LimitsQueue, req.IsActive)
+	// Insert ke database (unit_id dari JWT token) - TANPA LOKET
+	query := "INSERT INTO services (unit_id, nama_service, code, limits_queue, is_active) VALUES (?, ?, ?, ?, ?)"
+	result, err := config.DB.Exec(query, *claims.UnitID, req.NamaService, req.Code, req.LimitsQueue, req.IsActive)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal membuat service",
@@ -355,12 +372,27 @@ func CreateService(c *fiber.Ctx) error {
 
 	id, _ := result.LastInsertId()
 
-	// Ambil data yang baru dibuat
+	// Ambil data yang baru dibuat dengan JOIN ke units
 	var service models.Service
-	config.DB.QueryRow(
-		"SELECT id, unit_id, nama_service, code, loket, limits_queue, is_active, created_at, updated_at FROM services WHERE id = ?",
-		id,
-	).Scan(&service.ID, &service.UnitID, &service.NamaService, &service.Code, &service.Loket, &service.LimitsQueue, &service.IsActive, &service.CreatedAt, &service.UpdatedAt)
+	config.DB.QueryRow(`
+		SELECT 
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue, 
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
+		WHERE s.id = ?
+	`, id).Scan(
+		&service.ID,
+		&service.UnitID,
+		&service.NamaService,
+		&service.Code,
+		&service.LimitsQueue,
+		&service.IsActive,
+		&service.CreatedAt,
+		&service.UpdatedAt,
+		&service.Loket, // dari units.nama_unit
+	)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"success": true,
@@ -384,7 +416,6 @@ func UpdateService(c *fiber.Ctx) error {
 	var req struct {
 		NamaService string `json:"nama_service"`
 		Code        string `json:"code"`
-		Loket       string `json:"loket"`
 		LimitsQueue *int   `json:"limits_queue"`
 		IsActive    string `json:"is_active"`
 	}
@@ -395,7 +426,6 @@ func UpdateService(c *fiber.Ctx) error {
 		})
 	}
 
-	// Cek apakah service ada dan milik unit ini
 	var exists int
 	err := config.DB.QueryRow("SELECT COUNT(*) FROM services WHERE id = ? AND unit_id = ?", id, *claims.UnitID).Scan(&exists)
 	if err != nil || exists == 0 {
@@ -404,7 +434,6 @@ func UpdateService(c *fiber.Ctx) error {
 		})
 	}
 
-	// Build dynamic update query
 	query := "UPDATE services SET "
 	args := []interface{}{}
 	updates := []string{}
@@ -414,7 +443,7 @@ func UpdateService(c *fiber.Ctx) error {
 		re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 		if !re.MatchString(req.Code) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Code service harus 1-2 huruf dan tanpa angka atau karakter khusus",
+				"error": "Code service harus 1-10 huruf dan tanpa angka atau karakter khusus",
 			})
 		}
 		var count int
@@ -431,11 +460,6 @@ func UpdateService(c *fiber.Ctx) error {
 	if req.NamaService != "" {
 		updates = append(updates, "nama_service = ?")
 		args = append(args, req.NamaService)
-	}
-
-	if req.Loket != "" {
-		updates = append(updates, "loket = ?")
-		args = append(args, req.Loket)
 	}
 
 	if req.LimitsQueue != nil {
@@ -471,10 +495,25 @@ func UpdateService(c *fiber.Ctx) error {
 	}
 
 	var service models.Service
-	config.DB.QueryRow(
-		"SELECT id, unit_id, nama_service, code, loket, limits_queue, is_active, created_at, updated_at FROM services WHERE id = ?",
-		id,
-	).Scan(&service.ID, &service.UnitID, &service.NamaService, &service.Code, &service.Loket, &service.LimitsQueue, &service.IsActive, &service.CreatedAt, &service.UpdatedAt)
+	config.DB.QueryRow(`
+		SELECT 
+			s.id, s.unit_id, s.nama_service, s.code, s.limits_queue, 
+			s.is_active, s.created_at, s.updated_at,
+			u.nama_unit as loket
+		FROM services s
+		INNER JOIN units u ON s.unit_id = u.id
+		WHERE s.id = ?
+	`, id).Scan(
+		&service.ID,
+		&service.UnitID,
+		&service.NamaService,
+		&service.Code,
+		&service.LimitsQueue,
+		&service.IsActive,
+		&service.CreatedAt,
+		&service.UpdatedAt,
+		&service.Loket, 
+	)
 
 	return c.JSON(fiber.Map{
 		"success": true,
