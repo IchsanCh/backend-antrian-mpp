@@ -6,6 +6,7 @@ import (
 	"backend-antrian/internal/http/middleware"
 	"backend-antrian/internal/realtime"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	fiberRecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
@@ -29,6 +31,11 @@ func main() {
 		ReadTimeout:   30 * time.Second,
 		WriteTimeout:  30 * time.Second,
 		IdleTimeout:   120 * time.Second,
+		// EnableTrustedProxyCheck: true,
+		// TrustedProxies: []string{
+		// 	"172.18.0.0/16",
+		// },
+		// ProxyHeader: fiber.HeaderXForwardedFor,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			if e, ok := err.(*fiber.Error); ok {
@@ -46,7 +53,7 @@ func main() {
 	config.InitDB()
 	defer config.CloseDB()
 
-	// Recover middleware (ini yang penting!)
+	// Recover middleware 
 	app.Use(fiberRecover.New(fiberRecover.Config{
 		EnableStackTrace: true,
 		StackTraceHandler: func(c *fiber.Ctx, e interface{}) {
@@ -61,10 +68,16 @@ func main() {
 		ExposeHeaders: "Content-Disposition, Content-Type, Content-Length",
 		AllowCredentials: false,
 	}))
-
+	//   app.Use(cors.New(cors.Config{
+    //             AllowOrigins:  "https://sandigi.lotusaja.com",
+    //             AllowHeaders:  "Origin, Content-Type, Accept, Authorization",
+    //             AllowMethods:  "GET, POST, PUT, DELETE, OPTIONS",
+    //             ExposeHeaders: "Content-Disposition, Content-Type, Content-Length",
+    //             AllowCredentials: true,
+    //     }))
 	// Rate limiting untuk WebSocket
 	app.Use("/ws/*", limiter.New(limiter.Config{
-		Max:        500,
+		Max:        1000,
 		Expiration: 1 * time.Minute,
 		LimitReached: func(c *fiber.Ctx) error {
 			log.Printf("[RATE_LIMIT] IP: %s", c.IP())
@@ -73,10 +86,12 @@ func main() {
 			})
 		},
 	}))
-
+	
 	app.Static("/", "./public")
-	app.Static("/audio", "./public/audio")
-
+	app.Use("/audio", filesystem.New(filesystem.Config{
+		Root:   http.Dir("./public/audio"),
+		Browse: false,
+	}))
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"message": "Antrian API jalan",
@@ -122,7 +137,7 @@ func main() {
 	api.Post("/units", middleware.RoleAuth("super_user"), handler.CreateUnit)
 	api.Put("/units/:id", middleware.RoleAuth("super_user"), handler.UpdateUnit)
 	api.Delete("/units/:id", middleware.RoleAuth("super_user"), handler.DeleteUnit)
-	api.Delete("/units/:id/permanent", middleware.RoleAuth("super_user"), handler.HardDeleteUser)
+	api.Delete("/units/:id/permanent", middleware.RoleAuth("super_user"), handler.HardDeleteUnit)
 
 	api.Post("/config", middleware.RoleAuth("super_user"), handler.CreateConfig)
 	api.Put("/config", middleware.RoleAuth("super_user"), handler.UpdateConfig)

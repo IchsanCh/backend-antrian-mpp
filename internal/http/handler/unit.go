@@ -197,9 +197,7 @@ func GetUnitByID(c *fiber.Ctx) error {
 
 // CreateUnit - Buat unit baru
 func CreateUnit(c *fiber.Ctx) error {
-	// Role sudah divalidasi di middleware, langsung parse request
 	var req struct {
-		Email       string  `json:"email"`
 		Code        string  `json:"code"`
 		NamaUnit    string  `json:"nama_unit"`
 		IsActive    string  `json:"is_active"`
@@ -219,6 +217,7 @@ func CreateUnit(c *fiber.Ctx) error {
 			"error": "Code dan nama unit wajib diisi",
 		})
 	}
+	
 	// Normalisasi code
 	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 
@@ -271,6 +270,7 @@ func CreateUnit(c *fiber.Ctx) error {
 		"SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE id = ?",
 		id,
 	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.AudioFile, &unit.CreatedAt, &unit.UpdatedAt)
+	
 	broadcastUnitsUpdate()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -284,9 +284,7 @@ func CreateUnit(c *fiber.Ctx) error {
 func UpdateUnit(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// Role sudah divalidasi di middleware
 	var req struct {
-		Email       string  `json:"email"`
 		Code        string  `json:"code"`
 		NamaUnit    string  `json:"nama_unit"`
 		IsActive    string  `json:"is_active"`
@@ -316,7 +314,7 @@ func UpdateUnit(c *fiber.Ctx) error {
 
 	if req.Code != "" {
 		req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
-		re := regexp.MustCompile(`^[[A-Z]{1,10}$`)
+		re := regexp.MustCompile(`^[A-Z]{1,10}$`)
 		if !re.MatchString(req.Code) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Code unit harus 1–10 huruf dan tanpa angka atau karakter khusus",
@@ -342,6 +340,7 @@ func UpdateUnit(c *fiber.Ctx) error {
 		updates = append(updates, "is_active = ?")
 		args = append(args, req.IsActive)
 	}
+	
 	if req.MainDisplay != "" {
 		updates = append(updates, "main_display = ?")
 		args = append(args, req.MainDisplay)
@@ -384,6 +383,7 @@ func UpdateUnit(c *fiber.Ctx) error {
 		"SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at FROM units WHERE id = ?",
 		id,
 	).Scan(&unit.ID, &unit.Code, &unit.NamaUnit, &unit.IsActive, &unit.MainDisplay, &unit.AudioFile, &unit.CreatedAt, &unit.UpdatedAt)
+	
 	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
@@ -396,17 +396,6 @@ func UpdateUnit(c *fiber.Ctx) error {
 // DeleteUnit - Hapus unit (soft delete)
 func DeleteUnit(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	// Role sudah divalidasi di middleware
-	var req struct {
-		Email string `json:"email"`
-	}
-
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
-	}
 
 	// Cek apakah unit ada
 	var exists int
@@ -424,6 +413,7 @@ func DeleteUnit(c *fiber.Ctx) error {
 			"error": "Gagal menghapus unit",
 		})
 	}
+	
 	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{
@@ -434,21 +424,24 @@ func DeleteUnit(c *fiber.Ctx) error {
 
 // HardDeleteUnit - Hapus unit permanent
 func HardDeleteUnit(c *fiber.Ctx) error {
-	id, _ := strconv.ParseInt(c.Params("id"), 10, 64)
-
-	// Role sudah divalidasi di middleware
-	var req struct {
-		Email string `json:"email"`
-	}
-
-	if err := c.BodyParser(&req); err != nil {
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
+			"error": "ID unit tidak valid",
 		})
 	}
 
+	// Langsung hapus, biar database yang handle foreign key constraint
 	result, err := config.DB.Exec("DELETE FROM units WHERE id = ?", id)
 	if err != nil {
+		// Cek apakah error karena foreign key constraint
+		if strings.Contains(err.Error(), "foreign key constraint") || 
+		   strings.Contains(err.Error(), "FOREIGN KEY") {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"error": "Unit tidak dapat dihapus karena masih digunakan oleh data lain",
+			})
+		}
+		
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal menghapus unit",
 		})
@@ -460,6 +453,7 @@ func HardDeleteUnit(c *fiber.Ctx) error {
 			"error": "Unit tidak ditemukan",
 		})
 	}
+	
 	broadcastUnitsUpdate()
 
 	return c.JSON(fiber.Map{

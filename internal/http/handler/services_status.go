@@ -22,10 +22,11 @@ type ServiceWithStatus struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	
 	// Info tambahan
-	TodayQueueCount int    `json:"today_queue_count"`
-	RemainingQuota  int    `json:"remaining_quota"`
-	Status          string `json:"status"` // available, closed, quota_full
-	StatusMessage   string `json:"status_message"`
+	TodayQueueCount   int    `json:"today_queue_count"`
+	WaitingQueueCount int    `json:"waiting_queue_count"` // TAMBAHAN BARU
+	RemainingQuota    int    `json:"remaining_quota"`
+	Status            string `json:"status"` // available, closed, quota_full
+	StatusMessage     string `json:"status_message"`
 }
 
 // GetServicesByUnitIDWithStatus - Menampilkan semua layanan dari unit tertentu dengan status
@@ -83,8 +84,6 @@ func GetServicesByUnitIDWithStatus(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	// Hitung waktu untuk filter hari ini
-
 	services := []ServiceWithStatus{}
 	for rows.Next() {
 		var service ServiceWithStatus
@@ -123,6 +122,23 @@ func GetServicesByUnitIDWithStatus(c *fiber.Ctx) error {
 		}
 
 		service.TodayQueueCount = todayCount
+
+		// TAMBAHAN BARU: Hitung jumlah antrian yang sedang menunggu (status = 'waiting')
+		var waitingCount int
+		err = config.DB.QueryRow(`
+			SELECT COUNT(*) 
+			FROM queue_tickets 
+			WHERE service_id = ? 
+			AND unit_id = ? 
+			AND status = 'waiting'
+			AND DATE(created_at) = CURDATE()
+		`, service.ID, unitID).Scan(&waitingCount)
+
+		if err != nil {
+			waitingCount = 0
+		}
+
+		service.WaitingQueueCount = waitingCount
 
 		// Tentukan status dan message
 		if service.IsActive != "y" {
