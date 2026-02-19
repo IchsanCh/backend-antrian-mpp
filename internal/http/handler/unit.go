@@ -25,7 +25,7 @@ func GetAllUnits(c *fiber.Ctx) error {
 		args = append(args, isActive)
 	}
 
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY nama_unit ASC"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
@@ -114,7 +114,7 @@ func GetAllUnitsPagination(c *fiber.Ctx) error {
 		args = append(args, search, search)
 	}
 
-	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY nama_unit ASC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
 	rows, err := config.DB.Query(query, args...)
@@ -466,7 +466,7 @@ func broadcastUnitsUpdate() {
 	rows, err := config.DB.Query(`
 		SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at
 		FROM units
-		ORDER BY created_at DESC
+		ORDER BY nama_unit ASC
 	`)
 	if err != nil {
 		return
