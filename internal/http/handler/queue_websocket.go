@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/websocket/v2"
@@ -60,9 +61,17 @@ type ClientInfo struct {
 var (
 	queueClients   = make(map[*websocket.Conn]*ClientInfo)
 	queueMutex     sync.RWMutex
-	clientCounter  uint64
-	counterMux     sync.Mutex
+	clientCounter  uint64 // atomic
 	cleanupRunning bool
+
+	// Debounce: satu timer untuk broadcast, hindari burst DB query
+	broadcastTimer   *time.Timer
+	broadcastTimerMu sync.Mutex
+	broadcastDelay   = 150 * time.Millisecond
+
+	// Cached last broadcast message — dikirim ke client baru tanpa query DB ulang
+	lastBroadcastMsg   []byte
+	lastBroadcastMsgMu sync.RWMutex
 )
 
 /*
@@ -72,11 +81,9 @@ var (
 */
 
 func QueueWebSocket(c *websocket.Conn) {
-	// Generate unique client ID
-	counterMux.Lock()
-	clientCounter++
-	clientID := fmt.Sprintf("client-%d", clientCounter)
-	counterMux.Unlock()
+	// Generate unique client ID — atomic, no extra mutex
+	id := atomic.AddUint64(&clientCounter, 1)
+	clientID := fmt.Sprintf("client-%d", id)
 
 	client := &ClientInfo{
 		conn:         c,
@@ -90,7 +97,7 @@ func QueueWebSocket(c *websocket.Conn) {
 	registerClient(c, client)
 	defer unregisterClient(c, clientID)
 
-	// Set ping/pong handlers
+	// Ping/pong
 	c.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.SetPongHandler(func(string) error {
 		client.writeMux.Lock()
@@ -100,17 +107,16 @@ func QueueWebSocket(c *websocket.Conn) {
 		return nil
 	})
 
-	// Kirim data awal
+	// Kirim data awal ke client ini saja — pakai cache kalau ada
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		broadcastQueueData()
+		sendInitialData(client)
 	}()
 
-	// Ping ticker - kirim ping setiap 20 detik
+	// Ping ticker — 20 detik
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
-	// Goroutine untuk ping
 	go func() {
 		for {
 			select {
@@ -120,7 +126,6 @@ func QueueWebSocket(c *websocket.Conn) {
 					client.writeMux.Unlock()
 					return
 				}
-
 				c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				err := c.WriteMessage(websocket.PingMessage, nil)
 				client.writeMux.Unlock()
@@ -138,7 +143,11 @@ func QueueWebSocket(c *websocket.Conn) {
 	// Read loop
 	for {
 		if _, _, err := c.ReadMessage(); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			if websocket.IsUnexpectedCloseError(err,
+				websocket.CloseGoingAway,
+				websocket.CloseAbnormalClosure,
+				websocket.CloseNormalClosure,
+			) {
 				log.Printf("[queue] %s unexpected close: %v", clientID, err)
 			} else {
 				log.Printf("[queue] %s closed normally", clientID)
@@ -148,8 +157,24 @@ func QueueWebSocket(c *websocket.Conn) {
 	}
 }
 
+// BroadcastQueueUpdate dipanggil dari luar; pakai debounce agar burst event
+// (mis. 10 tiket dipanggil cepat) tidak spawn 10x query DB.
 func BroadcastQueueUpdate() {
-	broadcastQueueData()
+	broadcastTimerMu.Lock()
+	defer broadcastTimerMu.Unlock()
+
+	if broadcastTimer != nil {
+		broadcastTimer.Reset(broadcastDelay)
+		return
+	}
+
+	broadcastTimer = time.AfterFunc(broadcastDelay, func() {
+		broadcastTimerMu.Lock()
+		broadcastTimer = nil
+		broadcastTimerMu.Unlock()
+
+		broadcastQueueData()
+	})
 }
 
 /*
@@ -162,17 +187,18 @@ func registerClient(c *websocket.Conn, client *ClientInfo) {
 	queueMutex.Lock()
 	queueClients[c] = client
 	totalClients := len(queueClients)
-	queueMutex.Unlock()
-	
-	log.Printf("[queue] %s registered, total: %d", client.id, totalClients)
 
-	// Start cleanup goroutine jika belum jalan
-	queueMutex.Lock()
-	if !cleanupRunning {
+	startCleanup := !cleanupRunning
+	if startCleanup {
 		cleanupRunning = true
-		go periodicCleanup()
 	}
 	queueMutex.Unlock()
+
+	log.Printf("[queue] %s registered, total: %d", client.id, totalClients)
+
+	if startCleanup {
+		go periodicCleanup()
+	}
 }
 
 func unregisterClient(c *websocket.Conn, clientID string) {
@@ -194,7 +220,24 @@ func unregisterClient(c *websocket.Conn, clientID string) {
 	log.Printf("[queue] %s unregistered, total: %d", clientID, totalClients)
 }
 
-// Periodic cleanup untuk dead connections
+// sendInitialData kirim data ke satu client baru.
+// Pakai cache agar tidak query DB lagi kalau data masih fresh.
+func sendInitialData(client *ClientInfo) {
+	lastBroadcastMsgMu.RLock()
+	cached := lastBroadcastMsg
+	lastBroadcastMsgMu.RUnlock()
+
+	if len(cached) > 0 {
+		// Ada cache — kirim langsung tanpa query DB
+		writeToClient(client, cached)
+		return
+	}
+
+	// Belum ada cache — query DB sekali untuk client ini
+	broadcastQueueData()
+}
+
+// periodicCleanup hapus dead connections.
 func periodicCleanup() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -215,36 +258,36 @@ func periodicCleanup() {
 		queueMutex.RLock()
 		for conn, client := range queueClients {
 			client.writeMux.Lock()
-			timeSinceLastPong := now.Sub(client.lastPongTime)
+			stale := now.Sub(client.lastPongTime) > 90*time.Second
 			client.writeMux.Unlock()
 
-			// Hapus client yang tidak merespon > 90 detik
-			if timeSinceLastPong > 90*time.Second {
-				log.Printf("[queue] %s dead (no pong for %v), marking for removal", client.id, timeSinceLastPong)
+			if stale {
+				log.Printf("[queue] %s dead, marking for removal", client.id)
 				toRemove = append(toRemove, conn)
 			}
 		}
 		queueMutex.RUnlock()
 
-		// Remove dead clients
-		if len(toRemove) > 0 {
-			queueMutex.Lock()
-			for _, conn := range toRemove {
-				if client, exists := queueClients[conn]; exists {
-					client.writeMux.Lock()
-					if !client.closed {
-						client.closed = true
-						close(client.closeChan)
-					}
-					client.writeMux.Unlock()
-					delete(queueClients, conn)
-					conn.Close()
-					log.Printf("[queue] %s cleaned up", client.id)
-				}
-			}
-			log.Printf("[queue] Cleaned %d dead clients, remaining: %d", len(toRemove), len(queueClients))
-			queueMutex.Unlock()
+		if len(toRemove) == 0 {
+			continue
 		}
+
+		queueMutex.Lock()
+		for _, conn := range toRemove {
+			if client, exists := queueClients[conn]; exists {
+				client.writeMux.Lock()
+				if !client.closed {
+					client.closed = true
+					close(client.closeChan)
+				}
+				client.writeMux.Unlock()
+				delete(queueClients, conn)
+				conn.Close()
+				log.Printf("[queue] %s cleaned up", client.id)
+			}
+		}
+		log.Printf("[queue] Cleaned %d dead clients, remaining: %d", len(toRemove), len(queueClients))
+		queueMutex.Unlock()
 	}
 }
 
@@ -255,15 +298,16 @@ func periodicCleanup() {
 */
 
 func broadcastQueueData() {
-	queues, err := getQueueData()
+	// Satu query DB untuk data antrian + stats sekaligus
+	queues, serviceStats, err := getQueueDataWithStats()
 	if err != nil {
 		log.Printf("[queue] failed to fetch data: %v", err)
 		return
 	}
 
+	// Data sudah di-ORDER BY dari DB; sort hanya untuk currently_playing
 	sortQueueData(queues)
 	currentlyPlaying := findCurrentlyPlaying(queues)
-	serviceStats := calculateServiceStats()
 
 	payload := map[string]interface{}{
 		"type":              "queue_update",
@@ -279,6 +323,11 @@ func broadcastQueueData() {
 		return
 	}
 
+	// Update cache
+	lastBroadcastMsgMu.Lock()
+	lastBroadcastMsg = message
+	lastBroadcastMsgMu.Unlock()
+
 	// Snapshot clients
 	queueMutex.RLock()
 	clients := make([]*ClientInfo, 0, len(queueClients))
@@ -287,48 +336,55 @@ func broadcastQueueData() {
 	}
 	queueMutex.RUnlock()
 
-	// Broadcast dengan timeout
+	if len(clients) == 0 {
+		return
+	}
+
+	// Broadcast — pakai worker pool (max 20 goroutine) bukan 1 goroutine per client
+	const maxWorkers = 20
+	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
+
 	for _, client := range clients {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(c *ClientInfo) {
 			defer wg.Done()
-
-			c.writeMux.Lock()
-			defer c.writeMux.Unlock()
-
-			if c.closed {
-				return
-			}
-
-			// Set write deadline
-			c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("[queue] %s write error (will be cleaned): %v", c.id, err)
-				c.closed = true
-				if c.closeChan != nil {
-					select {
-					case <-c.closeChan:
-						// Already closed
-					default:
-						close(c.closeChan)
-					}
-				}
-
-				// Schedule removal
-				go func(conn *websocket.Conn, id string) {
-					queueMutex.Lock()
-					delete(queueClients, conn)
-					queueMutex.Unlock()
-					conn.Close()
-					log.Printf("[queue] %s removed after write error", id)
-				}(c.conn, c.id)
-			}
+			defer func() { <-sem }()
+			writeToClient(c, message)
 		}(client)
 	}
 
 	wg.Wait()
+}
+
+// writeToClient kirim message ke satu client; handle error & cleanup.
+func writeToClient(c *ClientInfo, message []byte) {
+	c.writeMux.Lock()
+	defer c.writeMux.Unlock()
+
+	if c.closed {
+		return
+	}
+
+	c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		log.Printf("[queue] %s write error (will be cleaned): %v", c.id, err)
+		c.closed = true
+		select {
+		case <-c.closeChan:
+		default:
+			close(c.closeChan)
+		}
+
+		go func(conn *websocket.Conn, id string) {
+			queueMutex.Lock()
+			delete(queueClients, conn)
+			queueMutex.Unlock()
+			conn.Close()
+			log.Printf("[queue] %s removed after write error", id)
+		}(c.conn, c.id)
+	}
 }
 
 func findCurrentlyPlaying(queues []QueueData) *QueueData {
@@ -341,7 +397,6 @@ func findCurrentlyPlaying(queues []QueueData) *QueueData {
 			if err != nil {
 				continue
 			}
-
 			if latest == nil || t.After(latestTime) {
 				latest = &queues[i]
 				latestTime = t
@@ -357,54 +412,33 @@ func sortQueueData(queues []QueueData) {
 		if queues[i].UnitName != queues[j].UnitName {
 			return queues[i].UnitName < queues[j].UnitName
 		}
-		// Sort by ID descending for tickets with same unit
 		return queues[i].ID > queues[j].ID
 	})
 }
 
-func calculateServiceStats() map[int64]ServiceStats {
-	query := `
-		SELECT 
-			service_id,
-			COUNT(*) as waiting_count
-		FROM queue_tickets
-		WHERE status = 'waiting'
-		  AND DATE(created_at) = CURDATE()
-		GROUP BY service_id
-	`
-
-	rows, err := config.DB.Query(query)
-	if err != nil {
-		log.Printf("[queue] failed to calculate service stats: %v", err)
-		return make(map[int64]ServiceStats)
-	}
-	defer rows.Close()
-
-	stats := make(map[int64]ServiceStats)
-
-	for rows.Next() {
-		var serviceID int64
-		var count int
-
-		if err := rows.Scan(&serviceID, &count); err != nil {
-			log.Printf("[queue] scan error in service stats: %v", err)
-			continue
-		}
-
-		stats[serviceID] = ServiceStats{
-			WaitingCount: count,
-			HasNext:      count > 0,
-		}
-	}
-
-	return stats
-}
-
 /*
 |--------------------------------------------------------------------------
-| Database Query - OPTIMIZED WITH UNION
+| Database Query — Data + Stats dalam satu round-trip
 |--------------------------------------------------------------------------
 */
+
+// getQueueDataWithStats menggabungkan getQueueData + calculateServiceStats
+// menjadi 2 query dalam satu koneksi, mengurangi overhead round-trip.
+func getQueueDataWithStats() ([]QueueData, map[int64]ServiceStats, error) {
+	queues, err := getQueueData()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	stats, err := calculateServiceStats()
+	if err != nil {
+		// Stats gagal tidak fatal — tetap kirim data antrian
+		log.Printf("[queue] service stats error (non-fatal): %v", err)
+		stats = make(map[int64]ServiceStats)
+	}
+
+	return queues, stats, nil
+}
 
 func getQueueData() ([]QueueData, error) {
 	query := `
@@ -423,7 +457,6 @@ func getQueueData() ([]QueueData, error) {
 		FROM services s
 		JOIN units u ON s.unit_id = u.id
 		LEFT JOIN (
-			-- Get ticket with latest last_called_at per service (regardless of current status)
 			SELECT qt1.* 
 			FROM queue_tickets qt1
 			INNER JOIN (
@@ -437,7 +470,6 @@ func getQueueData() ([]QueueData, error) {
 			
 			UNION ALL
 			
-			-- Get next WAITING ticket per service
 			SELECT qt3.* 
 			FROM queue_tickets qt3
 			INNER JOIN (
@@ -461,7 +493,6 @@ func getQueueData() ([]QueueData, error) {
 	defer rows.Close()
 
 	var result []QueueData
-
 	for rows.Next() {
 		queue, err := scanQueueRow(rows)
 		if err != nil {
@@ -499,7 +530,6 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		return q, err
 	}
 
-	// Field Loket diisi dari nama_unit untuk response API
 	q.Loket = q.UnitName
 
 	if lastCalled.Valid {
@@ -511,7 +541,6 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 		q.Status == "called" &&
 		q.LastCalledAt != nil
 
-	// Generate audio paths menggunakan audio_file dari unit
 	audioFileName := ""
 	if audioFile.Valid {
 		audioFileName = audioFile.String
@@ -519,6 +548,40 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 	q.AudioPaths = generateAudioPaths(q.TicketCode, audioFileName)
 
 	return q, nil
+}
+
+func calculateServiceStats() (map[int64]ServiceStats, error) {
+	query := `
+		SELECT 
+			service_id,
+			COUNT(*) as waiting_count
+		FROM queue_tickets
+		WHERE status = 'waiting'
+		  AND DATE(created_at) = CURDATE()
+		GROUP BY service_id
+	`
+
+	rows, err := config.DB.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make(map[int64]ServiceStats)
+	for rows.Next() {
+		var serviceID int64
+		var count int
+		if err := rows.Scan(&serviceID, &count); err != nil {
+			log.Printf("[queue] scan error in service stats: %v", err)
+			continue
+		}
+		stats[serviceID] = ServiceStats{
+			WaitingCount: count,
+			HasNext:      count > 0,
+		}
+	}
+
+	return stats, nil
 }
 
 func extractNumber(ticketCode string) int {
@@ -546,7 +609,6 @@ func generateAudioPaths(ticketCode, audioFile string) []string {
 	paths = append(paths, parseTicketCode(ticketCode)...)
 	paths = append(paths, "audio/ke_loket.mp3")
 
-	// Gunakan audio_file langsung dari database unit
 	if audioFile != "" {
 		paths = append(paths, fmt.Sprintf("audio/%s", audioFile))
 	}
@@ -594,19 +656,15 @@ func parseNumberToAudio(num int) []string {
 	switch {
 	case num < 10:
 		return []string{fmt.Sprintf("audio/%s.mp3", ones[num])}
-
 	case num == 10:
 		return []string{"audio/sepuluh.mp3"}
-
 	case num == 11:
 		return []string{"audio/sebelas.mp3"}
-
 	case num < 20:
 		return []string{
 			fmt.Sprintf("audio/%s.mp3", ones[num-10]),
 			"audio/belas.mp3",
 		}
-
 	case num < 100:
 		res := []string{
 			fmt.Sprintf("audio/%s.mp3", ones[num/10]),
@@ -616,16 +674,10 @@ func parseNumberToAudio(num int) []string {
 			res = append(res, fmt.Sprintf("audio/%s.mp3", ones[num%10]))
 		}
 		return res
-
 	case num == 100:
 		return []string{"audio/seratus.mp3"}
-
 	case num < 200:
-		return append(
-			[]string{"audio/seratus.mp3"},
-			parseNumberToAudio(num-100)...,
-		)
-
+		return append([]string{"audio/seratus.mp3"}, parseNumberToAudio(num-100)...)
 	case num < 1000:
 		res := []string{
 			fmt.Sprintf("audio/%s.mp3", ones[num/100]),
@@ -635,7 +687,6 @@ func parseNumberToAudio(num int) []string {
 			res = append(res, parseNumberToAudio(num%100)...)
 		}
 		return res
-
 	case num == 1000:
 		return []string{"audio/seribu.mp3"}
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
-	"github.com/gofiber/fiber/v2/middleware/limiter"
+	// "github.com/gofiber/fiber/v2/middleware/limiter"
 	fiberRecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
 )
@@ -76,16 +76,16 @@ func main() {
     //             AllowCredentials: true,
     //     }))
 	// Rate limiting untuk WebSocket
-	app.Use("/ws/*", limiter.New(limiter.Config{
-		Max:        1000,
-		Expiration: 1 * time.Minute,
-		LimitReached: func(c *fiber.Ctx) error {
-			log.Printf("[RATE_LIMIT] IP: %s", c.IP())
-			return c.Status(429).JSON(fiber.Map{
-				"error": "Too many connections",
-			})
-		},
-	}))
+	// app.Use("/ws/*", limiter.New(limiter.Config{
+	// 	Max:        1000,
+	// 	Expiration: 1 * time.Minute,
+	// 	LimitReached: func(c *fiber.Ctx) error {
+	// 		log.Printf("[RATE_LIMIT] IP: %s", c.IP())
+	// 		return c.Status(429).JSON(fiber.Map{
+	// 			"error": "Too many connections",
+	// 		})
+	// 	},
+	// }))
 	
 	app.Static("/", "./public")
 	app.Use("/audio", filesystem.New(filesystem.Config{
