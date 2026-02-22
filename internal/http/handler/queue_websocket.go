@@ -64,13 +64,14 @@ var (
 	clientCounter  uint64 // atomic
 	cleanupRunning bool
 
-	// Debounce: satu timer untuk broadcast, hindari burst DB query
+	// Debounce broadcast — cegah burst DB query
 	broadcastTimer   *time.Timer
 	broadcastTimerMu sync.Mutex
-	broadcastDelay   = 150 * time.Millisecond
+	broadcastDelay   = 50 * time.Millisecond
 
-	// Cached last broadcast message — dikirim ke client baru tanpa query DB ulang
+	// Cache last broadcast — valid selama masih hari yang sama
 	lastBroadcastMsg   []byte
+	lastBroadcastTime  time.Time
 	lastBroadcastMsgMu sync.RWMutex
 )
 
@@ -81,7 +82,6 @@ var (
 */
 
 func QueueWebSocket(c *websocket.Conn) {
-	// Generate unique client ID — atomic, no extra mutex
 	id := atomic.AddUint64(&clientCounter, 1)
 	clientID := fmt.Sprintf("client-%d", id)
 
@@ -97,7 +97,7 @@ func QueueWebSocket(c *websocket.Conn) {
 	registerClient(c, client)
 	defer unregisterClient(c, clientID)
 
-	// Ping/pong
+	// Ping/pong handler
 	c.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.SetPongHandler(func(string) error {
 		client.writeMux.Lock()
@@ -107,13 +107,13 @@ func QueueWebSocket(c *websocket.Conn) {
 		return nil
 	})
 
-	// Kirim data awal ke client ini saja — pakai cache kalau ada
+	// Kirim data awal ke client ini saja — selalu fresh dari DB
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		sendInitialData(client)
+		sendToClient(client)
 	}()
 
-	// Ping ticker — 20 detik
+	// Ping ticker setiap 20 detik
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
@@ -157,8 +157,8 @@ func QueueWebSocket(c *websocket.Conn) {
 	}
 }
 
-// BroadcastQueueUpdate dipanggil dari luar; pakai debounce agar burst event
-// (mis. 10 tiket dipanggil cepat) tidak spawn 10x query DB.
+// BroadcastQueueUpdate dipanggil dari luar.
+// Pakai debounce 50ms — burst 10 event tetap 1x query DB.
 func BroadcastQueueUpdate() {
 	broadcastTimerMu.Lock()
 	defer broadcastTimerMu.Unlock()
@@ -187,7 +187,6 @@ func registerClient(c *websocket.Conn, client *ClientInfo) {
 	queueMutex.Lock()
 	queueClients[c] = client
 	totalClients := len(queueClients)
-
 	startCleanup := !cleanupRunning
 	if startCleanup {
 		cleanupRunning = true
@@ -220,24 +219,7 @@ func unregisterClient(c *websocket.Conn, clientID string) {
 	log.Printf("[queue] %s unregistered, total: %d", clientID, totalClients)
 }
 
-// sendInitialData kirim data ke satu client baru.
-// Pakai cache agar tidak query DB lagi kalau data masih fresh.
-func sendInitialData(client *ClientInfo) {
-	lastBroadcastMsgMu.RLock()
-	cached := lastBroadcastMsg
-	lastBroadcastMsgMu.RUnlock()
-
-	if len(cached) > 0 {
-		// Ada cache — kirim langsung tanpa query DB
-		writeToClient(client, cached)
-		return
-	}
-
-	// Belum ada cache — query DB sekali untuk client ini
-	broadcastQueueData()
-}
-
-// periodicCleanup hapus dead connections.
+// periodicCleanup hapus dead connections setiap 30 detik.
 func periodicCleanup() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -262,7 +244,7 @@ func periodicCleanup() {
 			client.writeMux.Unlock()
 
 			if stale {
-				log.Printf("[queue] %s dead, marking for removal", client.id)
+				log.Printf("[queue] %s dead (no pong), marking for removal", client.id)
 				toRemove = append(toRemove, conn)
 			}
 		}
@@ -297,17 +279,16 @@ func periodicCleanup() {
 |--------------------------------------------------------------------------
 */
 
-func broadcastQueueData() {
-	// Satu query DB untuk data antrian + stats sekaligus
-	queues, serviceStats, err := getQueueDataWithStats()
+// buildMessage query DB dan marshal payload — dipakai broadcast & initial data.
+func buildMessage() ([]byte, error) {
+	queues, err := getQueueData()
 	if err != nil {
-		log.Printf("[queue] failed to fetch data: %v", err)
-		return
+		return nil, fmt.Errorf("getQueueData: %w", err)
 	}
 
-	// Data sudah di-ORDER BY dari DB; sort hanya untuk currently_playing
 	sortQueueData(queues)
 	currentlyPlaying := findCurrentlyPlaying(queues)
+	serviceStats := calculateServiceStats()
 
 	payload := map[string]interface{}{
 		"type":              "queue_update",
@@ -317,15 +298,47 @@ func broadcastQueueData() {
 		"timestamp":         time.Now().Format(time.RFC3339),
 	}
 
-	message, err := json.Marshal(payload)
+	return json.Marshal(payload)
+}
+
+// sendToClient kirim data ke satu client baru.
+// Pakai cache kalau masih hari yang sama, query DB kalau beda hari atau cache kosong.
+func sendToClient(client *ClientInfo) {
+	lastBroadcastMsgMu.RLock()
+	cached := lastBroadcastMsg
+	cacheTime := lastBroadcastTime
+	lastBroadcastMsgMu.RUnlock()
+
+	now := time.Now()
+	cacheValid := len(cached) > 0 &&
+		now.Format("2006-01-02") == cacheTime.Format("2006-01-02")
+
+	if cacheValid {
+		writeToClient(client, cached)
+		return
+	}
+
+	// Cache kosong atau beda hari — query DB fresh
+	message, err := buildMessage()
 	if err != nil {
-		log.Printf("[queue] json marshal error: %v", err)
+		log.Printf("[queue] sendToClient error: %v", err)
+		return
+	}
+	writeToClient(client, message)
+}
+
+// broadcastQueueData kirim ke semua client yang terhubung.
+func broadcastQueueData() {
+	message, err := buildMessage()
+	if err != nil {
+		log.Printf("[queue] broadcastQueueData error: %v", err)
 		return
 	}
 
 	// Update cache
 	lastBroadcastMsgMu.Lock()
 	lastBroadcastMsg = message
+	lastBroadcastTime = time.Now()
 	lastBroadcastMsgMu.Unlock()
 
 	// Snapshot clients
@@ -340,7 +353,7 @@ func broadcastQueueData() {
 		return
 	}
 
-	// Broadcast — pakai worker pool (max 20 goroutine) bukan 1 goroutine per client
+	// Worker pool max 20 goroutine
 	const maxWorkers = 20
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
@@ -358,7 +371,7 @@ func broadcastQueueData() {
 	wg.Wait()
 }
 
-// writeToClient kirim message ke satu client; handle error & cleanup.
+// writeToClient kirim message ke satu client, handle error & cleanup.
 func writeToClient(c *ClientInfo, message []byte) {
 	c.writeMux.Lock()
 	defer c.writeMux.Unlock()
@@ -369,7 +382,7 @@ func writeToClient(c *ClientInfo, message []byte) {
 
 	c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		log.Printf("[queue] %s write error (will be cleaned): %v", c.id, err)
+		log.Printf("[queue] %s write error: %v", c.id, err)
 		c.closed = true
 		select {
 		case <-c.closeChan:
@@ -418,27 +431,9 @@ func sortQueueData(queues []QueueData) {
 
 /*
 |--------------------------------------------------------------------------
-| Database Query — Data + Stats dalam satu round-trip
+| Database Query
 |--------------------------------------------------------------------------
 */
-
-// getQueueDataWithStats menggabungkan getQueueData + calculateServiceStats
-// menjadi 2 query dalam satu koneksi, mengurangi overhead round-trip.
-func getQueueDataWithStats() ([]QueueData, map[int64]ServiceStats, error) {
-	queues, err := getQueueData()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	stats, err := calculateServiceStats()
-	if err != nil {
-		// Stats gagal tidak fatal — tetap kirim data antrian
-		log.Printf("[queue] service stats error (non-fatal): %v", err)
-		stats = make(map[int64]ServiceStats)
-	}
-
-	return queues, stats, nil
-}
 
 func getQueueData() ([]QueueData, error) {
 	query := `
@@ -550,7 +545,7 @@ func scanQueueRow(rows *sql.Rows) (QueueData, error) {
 	return q, nil
 }
 
-func calculateServiceStats() (map[int64]ServiceStats, error) {
+func calculateServiceStats() map[int64]ServiceStats {
 	query := `
 		SELECT 
 			service_id,
@@ -563,7 +558,8 @@ func calculateServiceStats() (map[int64]ServiceStats, error) {
 
 	rows, err := config.DB.Query(query)
 	if err != nil {
-		return nil, err
+		log.Printf("[queue] failed to calculate service stats: %v", err)
+		return make(map[int64]ServiceStats)
 	}
 	defer rows.Close()
 
@@ -581,7 +577,7 @@ func calculateServiceStats() (map[int64]ServiceStats, error) {
 		}
 	}
 
-	return stats, nil
+	return stats
 }
 
 func extractNumber(ticketCode string) int {
