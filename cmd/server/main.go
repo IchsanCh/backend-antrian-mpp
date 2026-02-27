@@ -15,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
+
 	// "github.com/gofiber/fiber/v2/middleware/limiter"
 	fiberRecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
@@ -102,6 +103,7 @@ func main() {
 
 	// Auth
 	app.Post("/san/login", handler.Login)
+	app.Post("/san/login-kiosk", handler.LoginKiosk)
 
 	// Public endpoints
 	app.Get("/api/units", handler.GetAllUnits)

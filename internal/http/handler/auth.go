@@ -103,3 +103,71 @@ func Login(c *fiber.Ctx) error {
 		"message": "Login berhasil! Selamat datang kembali, " + user.Nama,
 	})
 }
+func LoginKiosk(c *fiber.Ctx) error {
+	var req models.LoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request body",
+		})
+	}
+
+	if req.Email == "" || req.Password == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Email dan password harus diisi",
+		})
+	}
+
+	var user models.User
+	query := `SELECT id, nama, email, password, role, is_banned, unit_id
+	          FROM users WHERE email = ?`
+	err := config.DB.QueryRow(query, req.Email).Scan(
+		&user.ID,
+		&user.Nama,
+		&user.Email,
+		&user.Password,
+		&user.Role,
+		&user.IsBanned,
+		&user.UnitID,
+	)
+
+	if err == sql.ErrNoRows {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Email atau password salah",
+		})
+	}
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Database error",
+		})
+	}
+
+	if user.IsBanned == "y" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Akun Anda telah diblokir",
+		})
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Email atau password salah",
+		})
+	}
+
+	var unitID *int64
+	if user.UnitID.Valid {
+		unitID = &user.UnitID.Int64
+	}
+
+	token, err := config.GenerateToken(user.ID, user.Nama, user.Email, user.Role, unitID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to generate token",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"token":   token,
+		"user":    models.ToUserResponse(user),
+		"message": "Login berhasil! Selamat datang, " + user.Nama,
+	})
+}
