@@ -136,7 +136,7 @@ func TakeQueue(c *fiber.Ctx) error {
 	// 5. Generate ticket code
 	// Format: KODE_SERVICE + NOMOR_URUT (misal: KTP001, KTP002, dst)
 	queueNumber := todayQueueCount + 1
-	ticketCode := fmt.Sprintf("%s%03d", serviceCode, queueNumber)
+	ticketCode := fmt.Sprintf("%s%d", serviceCode, queueNumber)
 
 	// 6. Insert ticket ke database
 	query := `
