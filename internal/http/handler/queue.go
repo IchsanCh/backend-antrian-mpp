@@ -2,6 +2,7 @@ package handler
 
 import (
 	"backend-antrian/internal/config"
+	"backend-antrian/internal/helper"
 	"backend-antrian/internal/models"
 	"database/sql"
 	"fmt"
@@ -64,7 +65,20 @@ func TakeQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	// 2. Cek apakah service ada, aktif, dan sesuai dengan unit
+	// 2. Cek apakah unit sedang buka berdasarkan jadwal hari ini
+	unitStatus := helper.IsUnitOpen(config.DB, req.UnitID)
+	if !unitStatus.IsOpen {
+		msg := fmt.Sprintf("Unit %s sedang tutup", unitName)
+		if unitStatus.HasSchedule && unitStatus.JamBuka != "" {
+			msg = fmt.Sprintf("Unit %s sedang tutup • Jam operasional: %s - %s", unitName, unitStatus.JamBuka, unitStatus.JamTutup)
+		}
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"error":   msg,
+		})
+	}
+
+	// 3. Cek apakah service ada, aktif, dan sesuai dengan unit
 	var serviceActive string
 	var serviceName string
 	var serviceCode string
@@ -106,7 +120,7 @@ func TakeQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	// 3. Hitung jumlah antrian hari ini untuk service ini
+	// 4. Hitung jumlah antrian hari ini untuk service ini
 	// PERBAIKAN: Gunakan DATE() di MySQL untuk handle timezone lebih baik
 	var todayQueueCount int
 	err = config.DB.QueryRow(`
@@ -125,7 +139,7 @@ func TakeQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	// 4. Validasi limit queue (jika limits_queue > 0)
+	// 5. Validasi limit queue (jika limits_queue > 0)
 	if limitsQueue > 0 && todayQueueCount >= limitsQueue {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -133,12 +147,12 @@ func TakeQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	// 5. Generate ticket code
+	// 6. Generate ticket code
 	// Format: KODE_SERVICE + NOMOR_URUT (misal: KTP001, KTP002, dst)
 	queueNumber := todayQueueCount + 1
 	ticketCode := fmt.Sprintf("%s%d", serviceCode, queueNumber)
 
-	// 6. Insert ticket ke database
+	// 7. Insert ticket ke database
 	query := `
 		INSERT INTO queue_tickets 
 		(ticket_code, unit_id, service_id, user_id, status, created_at, updated_at) 
@@ -155,7 +169,7 @@ func TakeQueue(c *fiber.Ctx) error {
 	}
 
 	ticketID, _ := result.LastInsertId()
-	// 7. Insert transaction log (event: take)
+	// 8. Insert transaction log (event: take)
 	_, err = config.DB.Exec(`
 		INSERT INTO queue_transactions 
 		(ticket_id, event, actor_user_id, created_at, updated_at) 
@@ -172,7 +186,7 @@ func TakeQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	// 8. Ambil data ticket yang baru dibuat
+	// 9. Ambil data ticket yang baru dibuat
 	var ticket models.QueueTicket
 	err = config.DB.QueryRow(`
 		SELECT id, ticket_code, unit_id, service_id, user_id, status, 
@@ -202,7 +216,7 @@ func TakeQueue(c *fiber.Ctx) error {
 	// Broadcast update ke WebSocket display
 	BroadcastQueueUpdate()
 
-	// 9. Return response dengan info tambahan
+	// 10. Return response dengan info tambahan
 	remaining := 0
 	if limitsQueue > 0 {
 		remaining = limitsQueue - queueNumber

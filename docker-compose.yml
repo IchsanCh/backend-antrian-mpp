@@ -11,6 +11,7 @@ services:
       - ./temp:/app/temp
     environment:
       - CLIENT_MAX_BODY_SIZE=50M
+      - TZ=Asia/Jakarta
     networks:
       - nginx-proxy
     restart: unless-stopped
@@ -28,6 +29,7 @@ services:
       - LETSENCRYPT_HOST=backsan.lotusaja.com
       - LETSENCRYPT_EMAIL=info.lotusaja@gmail.com
       - CLIENT_MAX_BODY_SIZE=50M
+      - TZ=Asia/Jakarta
     expose:
       - "80"
     networks:

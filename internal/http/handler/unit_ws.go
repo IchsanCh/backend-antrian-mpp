@@ -5,10 +5,26 @@ import (
 	"backend-antrian/internal/helper"
 	"backend-antrian/internal/models"
 	"backend-antrian/internal/realtime"
+	"encoding/json"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 )
+
+// UnitWithStatus - payload per unit yang dikirim via WS
+type UnitWithStatus struct {
+	ID          int64   `json:"id"`
+	Code        string  `json:"code"`
+	NamaUnit    string  `json:"nama_unit"`
+	IsActive    string  `json:"is_active"`
+	MainDisplay string  `json:"main_display"`
+	AudioFile   *string `json:"audio_file"`
+	// Status jadwal hari ini
+	Queue       string `json:"queue"`        // "open" atau "closed"
+	JamBuka     string `json:"jam_buka"`     // kosong jika tidak ada jadwal/libur
+	JamTutup    string `json:"jam_tutup"`    // kosong jika tidak ada jadwal/libur
+	HasSchedule bool   `json:"has_schedule"` // false = tidak ada jadwal hari ini
+}
 
 func UnitsWS(c *websocket.Conn) {
 	realtime.Units.Register <- c
@@ -16,36 +32,79 @@ func UnitsWS(c *websocket.Conn) {
 		realtime.Units.Unregister <- c
 	}()
 
-	var cfg models.Config
-	err := config.DB.QueryRow(`
-		SELECT jam_buka, jam_tutup, text_marque
-		FROM configs
-		LIMIT 1
-	`).Scan(&cfg.JamBuka, &cfg.JamTutup, &cfg.TextMarque)
+	// Kirim status awal semua unit saat client connect
+	payload := buildUnitsStatusPayload()
+	_ = c.WriteMessage(websocket.TextMessage, payload)
 
-	if err != nil {
-		_ = c.WriteJSON(fiber.Map{
-			"type":    "error",
-			"message": "Konfigurasi antrian belum diatur",
-		})
-		return
-	}
-
-	if !helper.IsQueueOpen(cfg.JamBuka, cfg.JamTutup) {
-		_ = c.WriteJSON(fiber.Map{
-			"type":      "status",
-			"queue":     "closed",
-			"message":   "Antrian belum dibuka",
-			"jam_buka":  cfg.JamBuka,
-			"jam_tutup": cfg.JamTutup,
-		})
-	}
-
-	// listen client
+	// Listen client (untuk detect disconnect)
 	for {
 		if _, _, err := c.ReadMessage(); err != nil {
 			break
 		}
 	}
+}
+
+// buildUnitsStatusPayload - bangun JSON payload semua unit dengan status jadwal
+func buildUnitsStatusPayload() []byte {
+	rows, err := config.DB.Query(`
+		SELECT id, code, nama_unit, is_active, main_display, audio_file
+		FROM units
+		ORDER BY nama_unit ASC
+	`)
+	if err != nil {
+		payload, _ := json.Marshal(fiber.Map{
+			"type":  "units_status",
+			"units": []UnitWithStatus{},
+		})
+		return payload
+	}
+	defer rows.Close()
+
+	var units []UnitWithStatus
+	for rows.Next() {
+		var u models.Unit
+		if err := rows.Scan(
+			&u.ID, &u.Code, &u.NamaUnit, &u.IsActive, &u.MainDisplay, &u.AudioFile,
+		); err != nil {
+			continue
+		}
+
+		status := helper.IsUnitOpen(config.DB, u.ID)
+
+		queueStr := "closed"
+		if status.IsOpen {
+			queueStr = "open"
+		}
+
+		units = append(units, UnitWithStatus{
+			ID:          u.ID,
+			Code:        u.Code,
+			NamaUnit:    u.NamaUnit,
+			IsActive:    u.IsActive,
+			MainDisplay: u.MainDisplay,
+			AudioFile:   u.AudioFile,
+			Queue:       queueStr,
+			JamBuka:     status.JamBuka,
+			JamTutup:    status.JamTutup,
+			HasSchedule: status.HasSchedule,
+		})
+	}
+
+	if units == nil {
+		units = []UnitWithStatus{}
+	}
+
+	payload, _ := json.Marshal(fiber.Map{
+		"type":  "units_status",
+		"units": units,
+	})
+	return payload
+}
+
+// BroadcastUnitsStatus - broadcast status semua unit ke semua WS client
+// Dipanggil setiap kali ada perubahan unit atau jadwal
+func BroadcastUnitsStatus() {
+	payload := buildUnitsStatusPayload()
+	realtime.Units.Broadcast <- payload
 }
 

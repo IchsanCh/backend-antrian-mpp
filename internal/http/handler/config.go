@@ -4,19 +4,16 @@ import (
 	"backend-antrian/internal/config"
 	"backend-antrian/internal/models"
 	"database/sql"
-	"regexp"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 func GetConfig(c *fiber.Ctx) error {
 	var cfg models.Config
-	query := "SELECT id, jam_buka, jam_tutup, text_marque FROM configs LIMIT 1"
+	query := "SELECT id, text_marque FROM configs LIMIT 1"
 
 	err := config.DB.QueryRow(query).Scan(
 		&cfg.ID,
-		&cfg.JamBuka,
-		&cfg.JamTutup,
 		&cfg.TextMarque,
 	)
 
@@ -40,11 +37,7 @@ func GetConfig(c *fiber.Ctx) error {
 
 // CreateConfig - Buat konfigurasi baru (hanya jika belum ada)
 func CreateConfig(c *fiber.Ctx) error {
-	// Role sudah divalidasi di middleware (super_user only)
 	var req struct {
-		Email    string `json:"email"`
-		JamBuka  string `json:"jam_buka"`
-		JamTutup string `json:"jam_tutup"`
 		TextMarque string `json:"text_marque"`
 	}
 
@@ -54,18 +47,9 @@ func CreateConfig(c *fiber.Ctx) error {
 		})
 	}
 
-	// Validasi input
-	if req.JamBuka == "" || req.JamTutup == "" || req.TextMarque == "" {
+	if req.TextMarque == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Jam buka, jam tutup dan text marque wajib diisi",
-		})
-	}
-
-	// Validasi format waktu (HH:MM:SS)
-	timeRegex := regexp.MustCompile(`^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$`)
-	if !timeRegex.MatchString(req.JamBuka) || !timeRegex.MatchString(req.JamTutup) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Format waktu harus HH:MM:SS (contoh: 08:00:00)",
+			"error": "Text marque wajib diisi",
 		})
 	}
 
@@ -84,9 +68,7 @@ func CreateConfig(c *fiber.Ctx) error {
 		})
 	}
 
-	// Insert ke database
-	query := "INSERT INTO configs (jam_buka, jam_tutup, text_marque) VALUES (?, ?, ?)"
-	result, err := config.DB.Exec(query, req.JamBuka, req.JamTutup, req.TextMarque)
+	result, err := config.DB.Exec("INSERT INTO configs (text_marque) VALUES (?)", req.TextMarque)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal membuat konfigurasi",
@@ -95,12 +77,9 @@ func CreateConfig(c *fiber.Ctx) error {
 
 	id, _ := result.LastInsertId()
 
-	// Ambil data yang baru dibuat
 	var cfg models.Config
-	config.DB.QueryRow(
-		"SELECT id, jam_buka, jam_tutup, text_marque FROM configs WHERE id = ?",
-		id,
-	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup, &cfg.TextMarque)
+	config.DB.QueryRow("SELECT id, text_marque FROM configs WHERE id = ?", id).
+		Scan(&cfg.ID, &cfg.TextMarque)
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"success": true,
@@ -111,11 +90,7 @@ func CreateConfig(c *fiber.Ctx) error {
 
 // UpdateConfig - Update konfigurasi yang sudah ada
 func UpdateConfig(c *fiber.Ctx) error {
-	// Role sudah divalidasi di middleware (super_user only)
 	var req struct {
-		Email    string `json:"email"`
-		JamBuka  string `json:"jam_buka"`
-		JamTutup string `json:"jam_tutup"`
 		TextMarque string `json:"text_marque"`
 	}
 
@@ -125,22 +100,12 @@ func UpdateConfig(c *fiber.Ctx) error {
 		})
 	}
 
-	// Validasi input
-	if req.JamBuka == "" || req.JamTutup == "" || req.TextMarque == "" {
+	if req.TextMarque == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Jam buka, jam tutup dan text marque wajib diisi",
+			"error": "Text marque wajib diisi",
 		})
 	}
 
-	// Validasi format waktu (HH:MM:SS)
-	timeRegex := regexp.MustCompile(`^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$`)
-	if !timeRegex.MatchString(req.JamBuka) || !timeRegex.MatchString(req.JamTutup) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Format waktu harus HH:MM:SS (contoh: 08:00:00)",
-		})
-	}
-
-	// Cek apakah ada data yang bisa diupdate
 	var configID int64
 	err := config.DB.QueryRow("SELECT id FROM configs LIMIT 1").Scan(&configID)
 	if err == sql.ErrNoRows {
@@ -154,21 +119,16 @@ func UpdateConfig(c *fiber.Ctx) error {
 		})
 	}
 
-	// Update data
-	query := "UPDATE configs SET jam_buka = ?, jam_tutup = ?, text_marque = ? WHERE id = ?"
-	_, err = config.DB.Exec(query, req.JamBuka, req.JamTutup, req.TextMarque, configID)
+	_, err = config.DB.Exec("UPDATE configs SET text_marque = ? WHERE id = ?", req.TextMarque, configID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Gagal mengupdate konfigurasi",
 		})
 	}
 
-	// Ambil data yang sudah diupdate
 	var cfg models.Config
-	config.DB.QueryRow(
-		"SELECT id, jam_buka, jam_tutup, text_marque FROM configs WHERE id = ?",
-		configID,
-	).Scan(&cfg.ID, &cfg.JamBuka, &cfg.JamTutup, &cfg.TextMarque)
+	config.DB.QueryRow("SELECT id, text_marque FROM configs WHERE id = ?", configID).
+		Scan(&cfg.ID, &cfg.TextMarque)
 
 	return c.JSON(fiber.Map{
 		"success": true,

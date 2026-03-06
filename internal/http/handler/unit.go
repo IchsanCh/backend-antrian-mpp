@@ -3,9 +3,7 @@ package handler
 import (
 	"backend-antrian/internal/config"
 	"backend-antrian/internal/models"
-	"backend-antrian/internal/realtime"
 	"database/sql"
-	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -463,37 +461,5 @@ func HardDeleteUnit(c *fiber.Ctx) error {
 }
 
 func broadcastUnitsUpdate() {
-	rows, err := config.DB.Query(`
-		SELECT id, code, nama_unit, is_active, main_display, audio_file, created_at, updated_at
-		FROM units
-		ORDER BY nama_unit ASC
-	`)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-
-	units := []models.Unit{}
-	for rows.Next() {
-		var unit models.Unit
-		if err := rows.Scan(
-			&unit.ID,
-			&unit.Code,
-			&unit.NamaUnit,
-			&unit.IsActive,
-			&unit.MainDisplay,
-			&unit.AudioFile,
-			&unit.CreatedAt,
-			&unit.UpdatedAt,
-		); err == nil {
-			units = append(units, unit)
-		}
-	}
-
-	payload, _ := json.Marshal(fiber.Map{
-		"type": "units_updated",
-		"data": units,
-	})
-
-	realtime.Units.Broadcast <- payload
+	BroadcastUnitsStatus()
 }

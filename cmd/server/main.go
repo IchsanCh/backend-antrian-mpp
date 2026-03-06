@@ -141,6 +141,11 @@ func main() {
 	api.Delete("/units/:id", middleware.RoleAuth("super_user"), handler.DeleteUnit)
 	api.Delete("/units/:id/permanent", middleware.RoleAuth("super_user"), handler.HardDeleteUnit)
 
+	// Unit schedules (jam operasional per unit)
+	api.Get("/units/:id/schedules", middleware.RoleAuth("super_user"), handler.GetUnitSchedules)
+	api.Post("/units/:id/schedules", middleware.RoleAuth("super_user"), handler.UpsertUnitSchedules)
+	api.Delete("/units/:id/schedules/:schedule_id", middleware.RoleAuth("super_user"), handler.DeleteUnitSchedule)
+
 	api.Post("/config", middleware.RoleAuth("super_user"), handler.CreateConfig)
 	api.Put("/config", middleware.RoleAuth("super_user"), handler.UpdateConfig)
 	api.Get("/backup/database", middleware.RoleAuth("super_user"), handler.ExportDatabase)
