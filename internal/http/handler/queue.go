@@ -69,7 +69,7 @@ func TakeQueue(c *fiber.Ctx) error {
 	unitStatus := helper.IsUnitOpen(config.DB, req.UnitID)
 	if !unitStatus.IsOpen {
 		msg := fmt.Sprintf("Unit %s sedang tutup", unitName)
-		if unitStatus.HasSchedule && unitStatus.JamBuka != "" {
+		if unitStatus.IsActiveDay && unitStatus.JamBuka != "" {
 			msg = fmt.Sprintf("Unit %s sedang tutup • Jam operasional: %s - %s", unitName, unitStatus.JamBuka, unitStatus.JamTutup)
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{

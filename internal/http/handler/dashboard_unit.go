@@ -46,7 +46,7 @@ func GetUnitDashboardStatistics(c *fiber.Ctx) error {
 		FROM queue_tickets qt
 		WHERE qt.unit_id = ?
 		AND DATE(qt.created_at) = ?
-		AND qt.status = 'done'
+		AND (qt.status = 'done' OR qt.status = 'called')
 	`
 	err = config.DB.QueryRow(queryTotalServed, unitID, today).Scan(&totalServed)
 	if err != nil {

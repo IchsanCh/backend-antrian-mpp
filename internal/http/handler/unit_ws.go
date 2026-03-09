@@ -20,10 +20,11 @@ type UnitWithStatus struct {
 	MainDisplay string  `json:"main_display"`
 	AudioFile   *string `json:"audio_file"`
 	// Status jadwal hari ini
-	Queue       string `json:"queue"`        // "open" atau "closed"
-	JamBuka     string `json:"jam_buka"`     // kosong jika tidak ada jadwal/libur
-	JamTutup    string `json:"jam_tutup"`    // kosong jika tidak ada jadwal/libur
-	HasSchedule bool   `json:"has_schedule"` // false = tidak ada jadwal hari ini
+	Queue       string `json:"queue"`         // "open" atau "closed"
+	JamBuka     string `json:"jam_buka"`      // hanya diisi jika is_active='y'
+	JamTutup    string `json:"jam_tutup"`     // hanya diisi jika is_active='y'
+	HasSchedule bool   `json:"has_schedule"`  // false = tidak ada jadwal hari ini
+	IsActiveDay bool   `json:"is_active_day"` // false = hari ini is_active='n' (libur)
 }
 
 func UnitsWS(c *websocket.Conn) {
@@ -87,6 +88,7 @@ func buildUnitsStatusPayload() []byte {
 			JamBuka:     status.JamBuka,
 			JamTutup:    status.JamTutup,
 			HasSchedule: status.HasSchedule,
+			IsActiveDay: status.IsActiveDay,
 		})
 	}
 
@@ -107,4 +109,3 @@ func BroadcastUnitsStatus() {
 	payload := buildUnitsStatusPayload()
 	realtime.Units.Broadcast <- payload
 }
-

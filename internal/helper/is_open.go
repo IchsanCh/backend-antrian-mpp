@@ -13,6 +13,8 @@ type UnitScheduleStatus struct {
 	JamTutup string
 	// HasSchedule false berarti tidak ada jadwal hari ini (libur/tidak diset)
 	HasSchedule bool
+	// IsActiveDay true berarti is_active='y' (hari beroperasi), false berarti libur/tutup manual
+	IsActiveDay bool
 }
 
 // IsUnitOpen mengecek apakah unit tertentu sedang buka berdasarkan unit_schedules.
@@ -47,12 +49,12 @@ func IsUnitOpen(db *sql.DB, unitID int64) UnitScheduleStatus {
 	}
 
 	if isActive != "y" {
-		// Hari ini libur / tidak beroperasi
+		// Hari ini libur / tidak beroperasi — jangan tampilkan jam operasional
 		return UnitScheduleStatus{
 			IsOpen:      false,
 			HasSchedule: true,
-			JamBuka:     jamBuka,
-			JamTutup:    jamTutup,
+			IsActiveDay: false,
+			// Sengaja tidak mengisi JamBuka/JamTutup agar consumer tidak menampilkan jam
 		}
 	}
 
@@ -62,6 +64,7 @@ func IsUnitOpen(db *sql.DB, unitID int64) UnitScheduleStatus {
 	return UnitScheduleStatus{
 		IsOpen:      isOpen,
 		HasSchedule: true,
+		IsActiveDay: true,
 		JamBuka:     jamBuka,
 		JamTutup:    jamTutup,
 	}
