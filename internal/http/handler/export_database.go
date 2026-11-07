@@ -197,9 +197,11 @@ func ExportDatabaseLamp(c *fiber.Ctx) error {
 		"--no-tablespaces",
 		"--single-transaction",
 		"--quick",
-		"--routines",
 		"--triggers",
-		"--events",
+		// --routines dan --events sengaja dimatikan: di server dengan tabel sistem belum di-upgrade
+		// (mysql.proc / mysql.event, mis. data dir lama di MariaDB 10.4) SHOW FUNCTION STATUS dan
+		// SHOW EVENTS ditolak (error 1558 / 1577) dan seluruh dump gagal.
+		// Aktifkan lagi kalau server sudah di-upgrade (mysql_upgrade) dan memang pakai routine/event.
 		"--default-character-set=utf8mb4",
 		"-h", host,
 		"-P", port,
